@@ -1,0 +1,42 @@
+# Dependencias y build (se reinstalan/regeneran dentro de la imagen)
+node_modules
+.next
+out
+build
+
+# Secretos y entorno local — NUNCA deben entrar a la imagen.
+# Los valores de runtime los inyecta Dokploy como variables de entorno.
+.env
+.env.*
+!.env.local.example
+!.env.leads.example
+
+# Git y metadata
+.git
+.gitignore
+.github
+
+# Supabase CLI (solo local, no se usa en runtime)
+supabase/.temp
+supabase/.branches
+
+# Tooling / editor
+.vscode
+.idea
+.editorconfig
+.prettierrc
+.prettierignore
+eslint.config.mjs
+
+# Tests y docs (no hacen falta para el build de producción)
+**/*.test.ts
+**/*.test.tsx
+docs
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*

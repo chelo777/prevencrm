@@ -62,6 +62,15 @@ const SECURITY_HEADERS = [
 
 const nextConfig: NextConfig = {
   /**
+   * Standalone output for Docker/Dokploy.
+   *
+   * Produces `.next/standalone` with a minimal `server.js` and only the
+   * production `node_modules` actually traced as used — the runtime image
+   * copies that instead of the full dependency tree, keeping it small.
+   */
+  output: "standalone",
+
+  /**
    * Cache-Control policy.
    *
    * Why this exists:
