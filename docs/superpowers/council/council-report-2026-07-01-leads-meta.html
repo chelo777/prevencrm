@@ -1,0 +1,232 @@
+<!-- Reporte LLM Council — Spec "Leads Meta" para PrevenCRM — 2026-07-01 -->
+<meta charset="utf-8">
+<title>Council Report — Leads Meta Spec</title>
+<style>
+  :root{--bg:#fbfbfa;--card:#fff;--ink:#1c1c1a;--muted:#6b6b66;--line:#e6e5e1;
+    --accent:#8b5cf6;--red:#dc2626;--amber:#d97706;--green:#16a34a;--blue:#2563eb;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 22px 80px}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:28px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:18px 0;
+    box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .q{background:#f4f1fb;border-color:#e6ddfb}
+  .q b{color:var(--accent)}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 0 6px}
+  .verdict h3{font-size:18px;margin:20px 0 6px;letter-spacing:-.01em}
+  .verdict h3::before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;
+    background:var(--accent);margin-right:9px;vertical-align:middle}
+  .verdict strong{font-weight:650}
+  .verdict code,code{background:#f0efec;border:1px solid var(--line);border-radius:5px;
+    padding:.5px 5px;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  .verdict ul,.md ul{margin:6px 0 6px;padding-left:22px}
+  .verdict li,.md li{margin:3px 0}
+  .tally{display:flex;gap:14px;flex-wrap:wrap;margin:8px 0}
+  .chip{flex:1;min-width:200px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:#fff}
+  .chip .n{font-size:30px;font-weight:700;letter-spacing:-.03em}
+  .chip.win{border-color:#bbf7d0;background:#f0fdf4}.chip.win .n{color:var(--green)}
+  .chip.blind{border-color:#fed7aa;background:#fff7ed}.chip.blind .n{color:var(--amber)}
+  .chip small{color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:12px}
+  .adv{border:1px solid var(--line);border-radius:10px;padding:10px 8px;text-align:center;font-size:12px;background:#fff}
+  .adv b{display:block;font-size:12px;margin-bottom:3px}
+  .adv .badge{font-size:10px;padding:2px 6px;border-radius:20px;display:inline-block;margin-top:4px}
+  .adv.b-win{border-color:#86efac}.b-win .badge{background:#dcfce7;color:#166534}
+  .adv.b-blind{border-color:#fdba74}.b-blind .badge{background:#ffedd5;color:#9a3412}
+  .adv.b-fail{opacity:.55}.b-fail .badge{background:#fee2e2;color:#991b1b}
+  details{border:1px solid var(--line);border-radius:12px;margin:10px 0;background:#fff;overflow:hidden}
+  summary{cursor:pointer;padding:14px 18px;font-weight:600;list-style:none;display:flex;justify-content:space-between;align-items:center}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"\25B8";color:var(--muted);transition:transform .15s}
+  details[open] summary::after{transform:rotate(90deg)}
+  details .body{padding:0 18px 16px;border-top:1px solid var(--line)}
+  .md p{margin:10px 0}
+  .tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;margin-left:8px}
+  .t-con{background:#fee2e2;color:#991b1b}.t-fp{background:#fef9c3;color:#854d0e}
+  .t-exp{background:#ede9fe;color:#5b21b6}.t-out{background:#dbeafe;color:#1e40af}.t-exe{background:#dcfce7;color:#166534}
+  footer{color:var(--muted);font-size:12.5px;margin-top:36px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+
+<div class="wrap">
+  <h1>Consejo LLM &mdash; Spec "Leads Meta"</h1>
+  <div class="sub">PrevenCRM &middot; 2026-07-01 &middot; 5 asesores &rarr; peer review an&oacute;nimo &rarr; chairman</div>
+
+  <div class="card q">
+    <b>La pregunta:</b> &iquest;Es s&oacute;lido el spec del m&oacute;dulo de ingesta de leads de Meta Ads
+    (core agn&oacute;stico + Sheets Fase 1 + webhook/CAPI Fase 2, dentro de PrevenCRM) para pasar al plan de
+    implementaci&oacute;n? Negocio: prepaga en Argentina, equipo de 2-10, PWA.
+  </div>
+
+  <h2>Se&ntilde;al de votaci&oacute;n</h2>
+  <div class="tally">
+    <div class="chip win"><div class="n">5/5</div><small>revisores: <b>El Contrarian</b> fue la cr&iacute;tica m&aacute;s fuerte (fallas de correctitud)</small></div>
+    <div class="chip blind"><div class="n">5/5</div><small>revisores: <b>Primeros Principios</b> fue el mayor punto ciego ("elimin&aacute; Sheets")</small></div>
+  </div>
+  <div class="grid">
+    <div class="adv b-win"><b>Contrarian</b>correctitud<span class="badge">+ fuerte</span></div>
+    <div class="adv b-blind"><b>1&ordm; Principios</b>replanteo<span class="badge">punto ciego</span></div>
+    <div class="adv"><b>Outsider</b>claridad</div>
+    <div class="adv"><b>Ejecutor</b>implementaci&oacute;n</div>
+    <div class="adv b-fail"><b>Expansionista</b>upside<span class="badge">fall&oacute; &middot; re-corrido</span></div>
+  </div>
+
+  <h2>Veredicto del Chairman</h2>
+  <div class="card verdict" id="verdict"></div>
+
+  <h2>Respuestas de los asesores</h2>
+  <details><summary>El Contrarian <span class="tag t-con">correctitud</span></summary><div class="body md" data-src="a-con"></div></details>
+  <details><summary>El Pensador de Primeros Principios <span class="tag t-fp">replanteo</span></summary><div class="body md" data-src="a-fp"></div></details>
+  <details><summary>El Outsider <span class="tag t-out">claridad</span></summary><div class="body md" data-src="a-out"></div></details>
+  <details><summary>El Ejecutor <span class="tag t-exe">implementaci&oacute;n</span></summary><div class="body md" data-src="a-exe"></div></details>
+  <details><summary>El Expansionista <span class="tag t-exp">upside &middot; recuperado</span></summary><div class="body md" data-src="a-exp"></div></details>
+
+  <h2>Highlights del peer review</h2>
+  <details><summary>Lo que las 5 respuestas omitieron (emergi&oacute; en la revisi&oacute;n)</summary><div class="body md" data-src="peer"></div></details>
+
+  <footer>
+    Generado por LLM Council &middot; 2026-07-01 &middot; Analiza
+    <code>docs/superpowers/specs/2026-07-01-modulo-leads-meta-design.md</code>.
+    Transcript completo: <code>council-transcript-2026-07-01-leads-meta.md</code>.
+    Nota: "El Expansionista" fall&oacute; en la corrida original y fue re-ejecutado; su aporte se anexa como
+    upside recuperado (no estaba en la s&iacute;ntesis del chairman).
+  </footer>
+</div>
+
+<script type="text/plain" id="verdict-src">
+### Donde el consejo coincide
+1. **Dedupe mal ubicado, la falla fundacional.** Chequeo por `meta_lead_id` en el paso 5, pero la fila en `leads` se persiste en el paso 9, tras crear contacto (6) y deal (7). Sin transaccion, un crash entre el 6 y el 9 crea un **segundo deal**. Fix consensuado: un "claim" del `meta_lead_id` ANTES de crear entidades (el repo ya tiene el patron en `/api/automations/cron`).
+2. **`last_synced_at` como cursor esta roto sobre Sheets**, pierde leads en silencio. Leer el rango completo y confiar en el UNIQUE.
+3. **El disparador del cron no esta especificado** (Next.js self-hosted no tiene scheduler). El repo ya lo resuelve: `x-cron-secret` + lock, disparable por Vercel Cron o GitHub Actions.
+4. **CAPI con un unico `capi_synced_at` es insuficiente**, no soporta multiples eventos ni el retroceso de etapa (mandas conversion, el deal cae a Perdido y optimizas el ad hacia leads malos). Una fila por evento.
+5. **Round-robin sin estado**, y en el repo el round-robin actual es un placeholder confeso.
+6. **Falta plan de cutover/rollback** (hoy el asesor escribe en la hoja).
+
+### Donde el consejo choca
+**Sheets Fase 1 o webhook `leadgen` directo?** Primeros Principios quiere eliminar Sheets; los 5 revisores lo marcaron como el mayor punto ciego: el webhook exige **App Review de Meta** (semanas, puede rebotar) mientras los leads caen HOY en las hojas. Sintesis honesta: **no es "todo o nada"**, arrancar por Sheets Y disparar el App Review en paralelo. El mejor insight sobrevive: **mover CAPI al MVP**. Secundario ya resuelto por el codigo: "Leads Prepaga" ES el patron nativo (`deals` cuelga de `pipelines`). Round-robin: una cola "pull" suele convertir mejor para 2-10 vendedores.
+
+### Puntos ciegos detectados en peer review
+- **Colision del dedupe de CONTACTO con E.164**: `022_contact_phone_dedup` normaliza a solo-digitos con UNIQUE ahi; §5.4 usa E.164 con `+54`, entonces el upsert del paso 6 **duplica el contacto o rompe la ingesta**. Segunda falla fundacional.
+- **PII de salud + Ley 25.326 + Meta CAPI**: Meta prohibe transmitir datos de salud por CAPI, riesgo de **baneo de la cuenta publicitaria**. `raw_payload` sin retencion ni consentimiento.
+- **No existe infraestructura de Web Push** en el repo (cero VAPID o service worker). El "push PWA" es trabajo neto nuevo en el camino critico.
+- El trigger de notificaciones (027) es sobre `conversations`, no sobre deals.
+- CAPI exige **hashing SHA-256 + `event_id` + ventana de atribucion** (~7 dias vs ciclo de venta).
+- NULLs en `UNIQUE(account_id, meta_lead_id)` permiten duplicados en el historico.
+- Un **service account compartido rompe el aislamiento RLS** entre cuentas.
+- **Click-to-chat sale del numero personal** del asesor, rompe la trazabilidad del inbox compartido.
+- Sin observabilidad ni health-check por fuente.
+
+### La recomendacion
+El approach hibrido es correcto y el spec sigue, **pero NO pasar al plan** hasta cerrar 2 fallas de correctitud y el bloque de compliance. Se rechaza eliminar Sheets; se adopta **CAPI al MVP** + App Review en paralelo.
+
+**Correctitud (bloqueante):** reordenar el dedupe a un "claim" (insertar en `leads` como primer paso, en transaccion); unificar la estrategia de telefono con `022` + `phone-utils.ts` y definir la regla de merge de contacto; eliminar `last_synced_at` + manejar NULL de `meta_lead_id`; CAPI una fila por evento + SHA-256 + `event_id` + politica de retroceso.
+
+**Compliance salud (no negociable):** retencion, minimizacion y cifrado de `raw_payload`, consentimiento (Ley 25.326); **filtrar datos de salud del payload CAPI**.
+
+**Recortes del MVP:** quitar el asistente de mapeo (seed manual de las 4 hojas); historico como script one-shot; cron copiando el patron existente (cada 5 min, single-flight con lock).
+
+**Agregar:** Web Push completo (o degradar el criterio 3 a in-app); trigger `lead_received` sobre deals; round-robin de cero (o cola "pull"); trazabilidad de WhatsApp; health-check + contadores; reemplazar "funcion pura" por "core testeable con I/O inyectado".
+
+### Lo primero que hay que hacer
+**Exportar una fila REAL de cada una de las 4 hojas** y confirmar sobre datos verdaderos: (1) que existe la columna con el `id` del lead (`l:...`) usable como clave de dedupe, y (2) el formato exacto de los telefonos argentinos. Sin ese dato, las dos fallas fundacionales son especulacion.
+</script>
+
+<script type="text/plain" id="a-con-src">
+Core sincrono de 8 pasos (§3, §5) sin atomicidad ni cola. El dedupe (§5.5) es por `meta_lead_id` en la tabla `leads`, que se persiste recien en el **paso 9**. Si el proceso muere entre el paso 4 y el 9, el proximo cron reprocesa la fila y crea un **segundo deal**. Falta un "claim" del `meta_lead_id` ANTES de crear entidades.
+
+`last_synced_at` (§4.1, §5.2): Sheets no garantiza orden ni cursor confiable; una fila tardia o un backfill del asesor se pierde en silencio. El cursor real es el conjunto de `meta_lead_id` vistos.
+
+Supuesto peligroso: "hojas de solo-lectura" (§2, §5.3), pero el asesor HOY escribe ahi. No hay plan de cutover/rollback para el dia 1.
+
+CAPI (§6): un unico `capi_synced_at` no soporta multiples eventos ni el retroceso de etapa (mandas conversion, el deal cae a Perdido y optimizas hacia leads malos). Una fila por evento.
+
+Round-robin (§5.8) sin estado persistido ni manejo de asesor inactivo. El dedupe mal ubicado y el cursor por timestamp son fallas fundacionales: garantizan duplicados y leads perdidos.
+</script>
+
+<script type="text/plain" id="a-fp-src">
+Estan construyendo el core equivocado. El problema despojado: cuatro planillas de Meta necesitan volverse contactos accionables y Meta necesita saber quien compro. No requiere una capa de abstraccion de fuentes.
+
+**El adaptador de Sheets no deberia existir.** Meta permite el webhook `leadgen` desde el dia uno. Sheets + mapeo + cron + `last_synced_at` es infraestructura que se tira en Fase 2. El "core agnostico" existe para justificar esa basura; es complejidad para diferir el App Review (§9): decision de negocio disfrazada de arquitectura.
+
+**Replanteo:** el MVP real es webhook `leadgen`, luego contacto, deal, asignacion y notificacion. Es MENOS codigo. El asistente de mapeo (§3, §5.3) desaparece: el webhook da campos con `field_key`. La tabla `lead_sources` sobra. Lo unico que Sheets justifica es el import historico (§8), un script de una vez.
+
+**CAPI en Fase 2 es un error de prioridad.** El dolor de §0 es "feedback manual"; el CAPI solo depende de tener `meta_lead_id` que el webhook ya da. Deberia ser MVP.
+
+**Pregunta que el spec no hace:** por que un pipeline nuevo "Leads Prepaga" (§4.5) y no el `deals` existente con una etiqueta de origen?
+</script>
+
+<script type="text/plain" id="a-out-src">
+El core "funcion pura" (§3) hace I/O en los pasos 4-9: NO es pura. Jerga mal usada; digan "core con logica de dominio testeable, con I/O inyectado".
+
+§5.1 dice cron "cada 2-5 min" y §10.2 promete 5 min o menos, pero Next.js self-hosted no tiene cron nativo. Quien dispara `/api/leads/sync`? Decision de infra de la que depende TODO el MVP.
+
+Dedupe por `meta_lead_id` (§4.2, §5.5): la hoja trae la columna con el `id` (`l:...`)? Muestrenme un header real de las 4 hojas antes de comprometerse a esta clave.
+
+Contradiccion: §6 dispara CAPI "al cambiar etapa", pero CAPI es Fase 2 (§8) y el pipeline ya existe, entonces durante el MVP se mueven deals SIN conversion. El problema central (§0) NO se resuelve en el MVP.
+
+"Atribucion" aparece 6 veces sin definir. §11 deja abierto OAuth vs service account, pero §5.2 ya asume service account: el spec se contradice.
+</script>
+
+<script type="text/plain" id="a-exe-src">
+El cron cada 2-5 min (§3, §5.1) es el eslabon debil: Next.js 16 no tiene scheduler; hace falta disparador externo + lock (advisory lock) por solapamiento. Recortenlo a **cada 5 min, single-flight con lock**.
+
+"Filas nuevas desde `last_synced_at`" (§5.2) no funciona con Sheets. El mecanismo que escala es leer todo y dedupe por `meta_lead_id` (§4.2 UNIQUE). `last_synced_at` es humo.
+
+Orden del MVP: 1) migraciones + seed pipeline; 2) `phone.ts` + `mapping.ts` (puro); 3) core con payload mockeado; 4) adaptador Sheets + service account (§11: resolver dia 1; OAuth es scope-creep). El asistente de mapeo UI (§8): **recortenlo del MVP**, arranquen con mapeo por JSON de las 4 hojas.
+
+CAPI a Fase 2 esta bien; el import historico (§8) es un one-shot fragil: script aparte, no en el core.
+</script>
+
+<script type="text/plain" id="a-exp-src">
+_(Re-ejecutado: en la corrida original este asesor fallo y devolvio texto basura.)_
+
+Este spec construye una maquina de captura y la trata como el producto. El producto real es el **grafo de atribucion campana-lead-venta cerrada, con dinero y timestamps**, que nadie en el mercado argentino de prepagas tiene limpio. Lo subvaloran en tres frentes:
+
+1. **§4.2 + §6: el activo no es el lead, es el bucle de aprendizaje del CAPI.** Cada `capi_synced_at` con `Purchase` es senal de entrenamiento para Meta. Con `campaign/adset/ad_id` + etapa real, en 3-6 meses tenes **costo por venta cerrada por adset**, no por lead. Baja el CAC mas que cualquier feature. Pidanlo como reporte de primera clase, no "se reutiliza el dashboard" (§1).
+
+2. **§4.2 `raw_payload` + historico (§8): dataset para lead scoring.** Preguntas calificadoras + desenlace real = clasificador supervisado. El round-robin (§7) podria ser **priorizacion por probabilidad de cierre**. El historico ES el training set.
+
+3. **Base instalada de prevencrm = producto vendible.** El no-objetivo "multi-tenant agencia" (§1) descarta el mercado, no la feature. Construyanlo como plataforma de datos, no como buzon.
+</script>
+
+<script type="text/plain" id="peer-src">
+Los 5 revisores coincidieron: **la Respuesta B (El Contrarian) fue la mas fuerte (5/5)** y **la D (Primeros Principios) el mayor punto ciego (5/5)**, su tesis de eliminar Sheets ignora el App Review de Meta y es inconsistente con el import historico. Lo que emergio y ningun asesor habia visto:
+
+- **Colision del dedupe de contacto con E.164** (`022` guarda solo-digitos; §5.4 usa E.164), duplica o rompe la ingesta. Segunda falla fundacional.
+- **PII de salud, Ley 25.326, Meta prohibe salud en CAPI**, riesgo de baneo de la cuenta publicitaria.
+- **No existe Web Push** en el repo (hoy es in-app por Supabase realtime).
+- **CAPI real exige hashing SHA-256 + `event_id`** para deduplicar contra el pixel + ventana de atribucion.
+- El **trigger de notificacion (027) es sobre `conversations`**, no sobre deals, el path `lead_received` necesita su propio disparador.
+- **Un service account rompe el aislamiento RLS** (ve todas las hojas de todas las cuentas).
+- **Nadie leyo el repo:** el cron ya existe (`x-cron-secret` + lock) y el round-robin es un placeholder confeso (`engine.ts:427-430`).
+- **Click-to-chat sale del numero personal** del vendedor, rompe la trazabilidad del inbox compartido.
+- **Sin health-check por fuente:** un formulario que deja de sincronizar pierde leads en silencio.
+- **Falta una fila real de las 4 hojas** para confirmar que el `id` de dedupe existe en la fuente.
+</script>
+
+<script>
+  function md(t){
+    t=t.trim();
+    const lines=t.split("\n"); let out=[]; let inUl=false;
+    const inline=s=>s
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/`([^`]+)`/g,"<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+      .replace(/_([^_]+)_/g,"<em>$1</em>");
+    for(let ln of lines){
+      const r=ln.trim();
+      if(!r){ if(inUl){out.push("</ul>");inUl=false;} continue; }
+      if(r.startsWith("### ")){ if(inUl){out.push("</ul>");inUl=false;} out.push("<h3>"+inline(r.slice(4))+"</h3>"); continue; }
+      const li=r.match(/^([-*]|\d+\.)\s+(.*)/);
+      if(li){ if(!inUl){out.push("<ul>");inUl=true;} out.push("<li>"+inline(li[2])+"</li>"); continue; }
+      if(inUl){out.push("</ul>");inUl=false;}
+      out.push("<p>"+inline(r)+"</p>");
+    }
+    if(inUl)out.push("</ul>");
+    return out.join("");
+  }
+  function fill(id,target){ const el=document.getElementById(id); if(el) target.innerHTML=md(el.textContent); }
+  fill("verdict-src",document.getElementById("verdict"));
+  document.querySelectorAll("[data-src]").forEach(d=>fill(d.getAttribute("data-src")+"-src",d));
+</script>

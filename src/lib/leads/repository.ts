@@ -1,0 +1,341 @@
+// ============================================================
+// Adaptador Supabase del puerto LeadRepository (service-role).
+//
+// Corre con la clave de servicio (bypassa RLS) desde el cron y el
+// script histórico. Cada instancia está ligada a una fuente
+// (account_id, owner_user_id, pipeline destino).
+//
+// Reusa la dedupe de contactos de 022 (findExistingContact) para no
+// fragmentar contactos entre formularios (B4).
+// ============================================================
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { findExistingContact, isUniqueViolation } from "@/lib/contacts/dedupe";
+import type {
+  AssignableAgent,
+  ClaimedLead,
+  LeadAttribution,
+  LeadRepository,
+  LeadSourceConfig,
+  ColumnMapping,
+} from "./types";
+
+const DEAL_CURRENCY = "ARS";
+const ASSIGNABLE_ROLES = ["owner", "admin", "agent"];
+
+export function createLeadRepository(
+  admin: SupabaseClient,
+  source: LeadSourceConfig,
+): LeadRepository {
+  const { accountId, ownerUserId, id: sourceId, pipelineId, defaultStageId } = source;
+
+  /** Cache de custom_field ids por field_name (dentro de una corrida). */
+  const fieldCache = new Map<string, string>();
+
+  async function ensureCustomField(fieldName: string): Promise<string> {
+    const cached = fieldCache.get(fieldName);
+    if (cached) return cached;
+
+    const { data: existing } = await admin
+      .from("custom_fields")
+      .select("id")
+      .eq("account_id", accountId)
+      .eq("field_name", fieldName)
+      .limit(1)
+      .maybeSingle();
+
+    if (existing?.id) {
+      fieldCache.set(fieldName, existing.id as string);
+      return existing.id as string;
+    }
+
+    const { data: created, error } = await admin
+      .from("custom_fields")
+      .insert({
+        account_id: accountId,
+        user_id: ownerUserId,
+        field_name: fieldName,
+        field_type: "text",
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    fieldCache.set(fieldName, created.id as string);
+    return created.id as string;
+  }
+
+  return {
+    async claimLead(metaLeadId: string): Promise<ClaimedLead> {
+      // INSERT ... ON CONFLICT DO NOTHING (ignoreDuplicates).
+      const { data: inserted, error } = await admin
+        .from("leads")
+        .upsert(
+          {
+            account_id: accountId,
+            source_id: sourceId,
+            meta_lead_id: metaLeadId,
+            status: "claimed",
+          },
+          { onConflict: "account_id,meta_lead_id", ignoreDuplicates: true },
+        )
+        .select("id, status, contact_id, deal_id");
+      if (error) throw error;
+
+      if (inserted && inserted.length > 0) {
+        const row = inserted[0];
+        return {
+          leadId: row.id as string,
+          status: row.status as "claimed" | "processed",
+          isNew: true,
+          dealId: (row.deal_id as string | null) ?? null,
+          contactId: (row.contact_id as string | null) ?? null,
+        };
+      }
+
+      // Conflicto: ya existía. Traer el estado actual para reanudar/saltar.
+      const { data: found, error: findErr } = await admin
+        .from("leads")
+        .select("id, status, contact_id, deal_id")
+        .eq("account_id", accountId)
+        .eq("meta_lead_id", metaLeadId)
+        .single();
+      if (findErr) throw findErr;
+      return {
+        leadId: found.id as string,
+        status: found.status as "claimed" | "processed",
+        isNew: false,
+        dealId: (found.deal_id as string | null) ?? null,
+        contactId: (found.contact_id as string | null) ?? null,
+      };
+    },
+
+    async findOrCreateContact({ phoneE164, phoneRaw, name, email }) {
+      const phoneToStore = phoneE164 || phoneRaw || "";
+
+      if (phoneToStore) {
+        const existing = await findExistingContact(admin, accountId, phoneToStore);
+        if (existing) return { id: existing.id };
+      }
+
+      const insertRow = {
+        account_id: accountId,
+        user_id: ownerUserId,
+        phone: phoneToStore,
+        name: name ?? null,
+        email: email ?? null,
+      };
+      const { data, error } = await admin
+        .from("contacts")
+        .insert(insertRow)
+        .select("id")
+        .single();
+
+      if (error) {
+        // Carrera: otro proceso lo insertó entre el find y el insert.
+        if (isUniqueViolation(error) && phoneToStore) {
+          const again = await findExistingContact(admin, accountId, phoneToStore);
+          if (again) return { id: again.id };
+        }
+        throw error;
+      }
+      return { id: data.id as string };
+    },
+
+    async setCustomValues(contactId, values) {
+      for (const [label, value] of Object.entries(values)) {
+        if (!value) continue;
+        const fieldId = await ensureCustomField(label);
+        const { error } = await admin.from("contact_custom_values").upsert(
+          {
+            contact_id: contactId,
+            custom_field_id: fieldId,
+            value,
+          },
+          { onConflict: "contact_id,custom_field_id" },
+        );
+        if (error) throw error;
+      }
+    },
+
+    async addNote(contactId, text) {
+      if (!text) return;
+      const { error } = await admin.from("contact_notes").insert({
+        account_id: accountId,
+        contact_id: contactId,
+        user_id: ownerUserId,
+        note_text: text,
+      });
+      if (error) throw error;
+    },
+
+    async createDeal({ leadId, contactId, title }) {
+      const { data, error } = await admin
+        .from("deals")
+        .insert({
+          account_id: accountId,
+          user_id: ownerUserId,
+          pipeline_id: pipelineId,
+          stage_id: defaultStageId,
+          contact_id: contactId,
+          title: title || "Lead de Meta",
+          value: 0,
+          currency: DEAL_CURRENCY,
+          status: "active",
+        })
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      // Checkpoint de reanudación: linkear el deal al lead enseguida.
+      await admin.from("leads").update({ deal_id: data.id }).eq("id", leadId);
+      return { id: data.id as string };
+    },
+
+    async setLeadContact(leadId, contactId) {
+      const { error } = await admin
+        .from("leads")
+        .update({ contact_id: contactId })
+        .eq("id", leadId);
+      if (error) throw error;
+    },
+
+    async listAssignableAgents(): Promise<AssignableAgent[]> {
+      const { data: members, error } = await admin
+        .from("profiles")
+        .select("user_id")
+        .eq("account_id", accountId)
+        .in("account_role", ASSIGNABLE_ROLES);
+      if (error) throw error;
+      const userIds = (members ?? []).map((m) => m.user_id as string);
+      if (userIds.length === 0) return [];
+
+      // Carga actual = deals abiertos del pipeline por asesor.
+      const { data: openDeals } = await admin
+        .from("deals")
+        .select("assigned_agent_id")
+        .eq("account_id", accountId)
+        .eq("pipeline_id", pipelineId)
+        .eq("status", "active")
+        .not("assigned_agent_id", "is", null);
+
+      const counts = new Map<string, number>();
+      for (const d of openDeals ?? []) {
+        const a = d.assigned_agent_id as string;
+        counts.set(a, (counts.get(a) ?? 0) + 1);
+      }
+
+      return userIds.map((userId) => ({
+        userId,
+        openDeals: counts.get(userId) ?? 0,
+      }));
+    },
+
+    async assignDealIfUnassigned(dealId, userId) {
+      const { error } = await admin
+        .from("deals")
+        .update({ assigned_agent_id: userId })
+        .eq("id", dealId)
+        .is("assigned_agent_id", null);
+      if (error) throw error;
+    },
+
+    async finalizeLead(leadId, data) {
+      const a: LeadAttribution = data.attribution;
+      const { error } = await admin
+        .from("leads")
+        .update({
+          status: "processed",
+          phone_valid: data.phoneValid,
+          platform: a.platform,
+          is_organic: a.isOrganic,
+          campaign_id: a.campaignId,
+          campaign_name: a.campaignName,
+          adset_id: a.adsetId,
+          adset_name: a.adsetName,
+          ad_id: a.adId,
+          ad_name: a.adName,
+          form_id: a.formId,
+          form_name: a.formName,
+          lead_created_time: data.leadCreatedTime,
+          raw_payload: data.rawPayload,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", leadId);
+      if (error) throw error;
+    },
+
+    async quarantine(rawRow, reason) {
+      const { error } = await admin.from("lead_intake_errors").insert({
+        account_id: accountId,
+        source_id: sourceId,
+        raw_row: rawRow,
+        reason,
+      });
+      if (error) throw error;
+    },
+  };
+}
+
+// ------------------------------------------------------------
+// Carga de fuentes activas (para el cron).
+// ------------------------------------------------------------
+export async function loadActiveGoogleSheetSources(
+  admin: SupabaseClient,
+): Promise<LeadSourceConfig[]> {
+  const { data, error } = await admin
+    .from("lead_sources")
+    .select(
+      "id, account_id, owner_user_id, name, spreadsheet_id, sheet_gid, column_mapping, pipeline_id, default_stage_id, auto_assign",
+    )
+    .eq("kind", "google_sheet")
+    .eq("active", true);
+  if (error) throw error;
+
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    accountId: r.account_id as string,
+    ownerUserId: r.owner_user_id as string,
+    name: r.name as string,
+    spreadsheetId: (r.spreadsheet_id as string | null) ?? null,
+    sheetGid: (r.sheet_gid as string | null) ?? null,
+    columnMapping: (r.column_mapping as ColumnMapping) ?? {},
+    pipelineId: r.pipeline_id as string,
+    defaultStageId: r.default_stage_id as string,
+    autoAssign: (r.auto_assign as boolean) ?? true,
+  }));
+}
+
+// ------------------------------------------------------------
+// Bitácora de corrida del cron (health-check, B12).
+// ------------------------------------------------------------
+export interface SyncRunTotals {
+  rowsRead: number;
+  claimed: number;
+  processed: number;
+  quarantined: number;
+  errors: number;
+  ok: boolean;
+  message?: string;
+}
+
+export async function recordSyncRun(
+  admin: SupabaseClient,
+  accountId: string | null,
+  sourceId: string | null,
+  startedAt: string,
+  totals: SyncRunTotals,
+): Promise<void> {
+  await admin.from("lead_sync_runs").insert({
+    account_id: accountId,
+    source_id: sourceId,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    rows_read: totals.rowsRead,
+    claimed: totals.claimed,
+    processed: totals.processed,
+    quarantined: totals.quarantined,
+    errors: totals.errors,
+    ok: totals.ok,
+    message: totals.message ?? null,
+  });
+}
