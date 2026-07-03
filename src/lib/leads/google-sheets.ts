@@ -148,3 +148,55 @@ export async function fetchSheetRows(
   const [headers, ...rows] = values;
   return { headers, rows };
 }
+
+/** Una pestaña del documento, para el wizard. */
+export interface SheetTab {
+  gid: string;
+  title: string;
+  rowCount: number;
+}
+
+/** Lista las pestañas (título + gid + filas) del documento. */
+export async function fetchSpreadsheetTabs(
+  spreadsheetId: string,
+): Promise<SheetTab[]> {
+  const token = await getAccessToken();
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+    spreadsheetId,
+  )}?fields=sheets.properties(sheetId,title,gridProperties(rowCount))`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Sheets metadata error ${res.status}: ${await res.text()}`);
+  }
+  const json = (await res.json()) as {
+    sheets?: {
+      properties?: {
+        sheetId?: number;
+        title?: string;
+        gridProperties?: { rowCount?: number };
+      };
+    }[];
+  };
+  return (json.sheets ?? []).flatMap((s) => {
+    const p = s.properties;
+    if (p?.sheetId == null) return [];
+    return [
+      {
+        gid: String(p.sheetId),
+        title: p.title ?? `gid ${p.sheetId}`,
+        rowCount: p.gridProperties?.rowCount ?? 0,
+      },
+    ];
+  });
+}
+
+/** Email del service account (para el hint "compartí la hoja con…"). */
+export function getServiceAccountEmail(): string | null {
+  try {
+    return loadServiceAccount().client_email;
+  } catch {
+    return null;
+  }
+}
