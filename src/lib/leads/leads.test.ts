@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { normalizeArgentinePhone, toWhatsAppNumber } from "./phone";
-import { createLeadMapper, detectColumnByContent } from "./mapping";
+import { createLeadMapper, detectColumnByContent, suggestMapping } from "./mapping";
+import { parseSheetUrl } from "./sheet-url";
 import { ingestLead, pickLeastLoaded } from "./ingest";
 import type {
   AssignableAgent,
@@ -250,5 +251,79 @@ describe("pickLeastLoaded", () => {
   });
   it("devuelve null sin asesores", () => {
     expect(pickLeastLoaded([])).toBeNull();
+  });
+});
+
+// ============================================================
+// mapping.ts — renombres custom, ignore y suggestMapping (wizard)
+// ============================================================
+describe("ColumnMapping.custom e ignore", () => {
+  const raw = {
+    headers: ["id", "¿qué_edad_tenés?", "full_name", "phone_number", "Cimentarios", "lead_status"],
+    rows: [["l:1", "35", "Ana", "p:+543795586866", "llamar tarde", "calificado"]],
+  };
+
+  it("renombra un custom field con el nombre elegido", () => {
+    const { mapRow } = createLeadMapper(raw, {
+      custom: { "¿qué_edad_tenés?": "Edad" },
+    });
+    const { lead } = mapRow(raw.rows[0]);
+    expect(lead?.customFields["Edad"]).toBe("35");
+    expect(lead?.customFields["qué edad tenés"]).toBeUndefined();
+  });
+
+  it("ignora columnas listadas en ignore", () => {
+    const { mapRow } = createLeadMapper(raw, { ignore: ["cimentarios"] });
+    const { lead } = mapRow(raw.rows[0]);
+    expect(Object.values(lead?.customFields ?? {})).not.toContain("llamar tarde");
+  });
+
+  it("mapea 'Cimentarios' (typo real) a comments vía canonical", () => {
+    const { mapRow } = createLeadMapper(raw, {
+      canonical: { comments: "Cimentarios" },
+    });
+    const { lead } = mapRow(raw.rows[0]);
+    expect(lead?.comments).toBe("llamar tarde");
+  });
+});
+
+describe("suggestMapping (wizard)", () => {
+  it("sugiere canónicos, customs y devuelve los valores de estado (Hoja 2 real)", () => {
+    const raw = {
+      headers: ["¡", "created_time", "full_name", "phone_number", "ciudad", "¿qué_edad_tenés?", "lead_status", "id"],
+      rows: [
+        ["l:1736506344033192", "2026-06-15T23:16:04-05:00", "Flavia", "p:+543795586866", "Corrientes", "40", "calificado", ""],
+        ["l:1736506344033193", "2026-06-16T10:00:00-05:00", "Marta", "p:+543624101510", "Chaco", "51", "CREATED", ""],
+      ],
+    };
+    const s = suggestMapping(raw);
+    const byHeader = Object.fromEntries(s.columns.map((c) => [c.header, c]));
+    expect(byHeader["¡"].kind).toBe("canonical");
+    expect(byHeader["¡"].field).toBe("metaLeadId"); // contenido gana al header
+    expect(byHeader["phone_number"].field).toBe("phone");
+    expect(byHeader["¿qué_edad_tenés?"].kind).toBe("custom");
+    expect(byHeader["¿qué_edad_tenés?"].label).toBe("qué edad tenés");
+    expect(byHeader["¡"].samples[0]).toBe("l:1736506344033192");
+    expect(s.statusValues.sort()).toEqual(["CREATED", "calificado"]);
+    // la columna decoy "id" (vacía) no debe sugerirse como metaLeadId
+    expect(byHeader["id"]?.field).not.toBe("metaLeadId");
+  });
+});
+
+describe("parseSheetUrl", () => {
+  it("extrae id y gid de una URL completa", () => {
+    const r = parseSheetUrl(
+      "https://docs.google.com/spreadsheets/d/1IU3J6s5i8mCDTmJaXkHKbBQfbde_ldJuMJ9SeyiPzK8/edit?gid=217367597#gid=217367597",
+    );
+    expect(r.spreadsheetId).toBe("1IU3J6s5i8mCDTmJaXkHKbBQfbde_ldJuMJ9SeyiPzK8");
+    expect(r.gid).toBe("217367597");
+  });
+  it("acepta un ID pelado", () => {
+    const r = parseSheetUrl("1IU3J6s5i8mCDTmJaXkHKbBQfbde_ldJuMJ9SeyiPzK8");
+    expect(r.spreadsheetId).toBe("1IU3J6s5i8mCDTmJaXkHKbBQfbde_ldJuMJ9SeyiPzK8");
+    expect(r.gid).toBeNull();
+  });
+  it("rechaza texto que no es URL ni ID", () => {
+    expect(parseSheetUrl("hola mundo").spreadsheetId).toBeNull();
   });
 });

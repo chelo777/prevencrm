@@ -11,8 +11,11 @@
 // ============================================================
 
 import type {
+  CanonicalField,
   ColumnMapping,
+  ColumnSuggestion,
   LeadAttribution,
+  MappingSuggestion,
   NormalizedLead,
   RawSheetData,
 } from "./types";
@@ -189,17 +192,79 @@ export function resolveColumns(
   };
 
   // Todo lo no reclamado por un canónico -> custom field.
+  const ignored = new Set((mapping?.ignore ?? []).map(normalizeHeader));
+  const customNames = mapping?.custom ?? {};
   const claimed = new Set<number>(
     Object.values(resolved).filter((v): v is number => typeof v === "number" && v >= 0),
   );
   for (let i = 0; i < colCount; i++) {
     if (claimed.has(i)) continue;
-    const label = toLabel(raw.headers[i]);
+    if (ignored.has(norm[i])) continue;
+    const label = customNames[norm[i]] ?? toLabel(raw.headers[i]);
     if (!label) continue; // header vacío (columna decoy / trailing)
     resolved.customHeaders.push({ index: i, label });
   }
 
   return resolved;
+}
+
+/**
+ * Sugerencias de mapeo para el wizard: clasifica cada columna con la
+ * heurística existente (id/tel por contenido, resto por diccionario) y
+ * junta los valores distintos de la columna de estado.
+ */
+export function suggestMapping(
+  raw: RawSheetData,
+  mapping?: ColumnMapping,
+): MappingSuggestion {
+  const cols = resolveColumns(raw, mapping);
+  const samples = (i: number): string[] =>
+    raw.rows
+      .map((r) => (r[i] ?? "").trim())
+      .filter(Boolean)
+      .slice(0, 3);
+
+  const byIndex = new Map<number, ColumnSuggestion>();
+  for (const [key, value] of Object.entries(cols)) {
+    if (key === "customHeaders" || typeof value !== "number" || value < 0) continue;
+    const field = key as CanonicalField;
+    byIndex.set(value, {
+      index: value,
+      header: raw.headers[value] ?? "",
+      samples: samples(value),
+      kind: "canonical",
+      field,
+    });
+  }
+  for (const { index, label } of cols.customHeaders) {
+    byIndex.set(index, {
+      index,
+      header: raw.headers[index] ?? "",
+      samples: samples(index),
+      kind: "custom",
+      label,
+    });
+  }
+
+  const columns: ColumnSuggestion[] = [];
+  for (let i = 0; i < raw.headers.length; i++) {
+    const found = byIndex.get(i);
+    if (found) {
+      columns.push(found);
+      continue;
+    }
+    const header = (raw.headers[i] ?? "").trim();
+    const hasData = raw.rows.some((r) => (r[i] ?? "").trim() !== "");
+    if (!header && !hasData) continue; // columna totalmente vacía: no molestar
+    columns.push({ index: i, header, samples: samples(i), kind: "ignore" });
+  }
+
+  const statusValues =
+    cols.status >= 0
+      ? [...new Set(raw.rows.map((r) => (r[cols.status] ?? "").trim()).filter(Boolean))]
+      : [];
+
+  return { columns, statusValues };
 }
 
 function stripIdPrefix(v: string): string {

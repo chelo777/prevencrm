@@ -72,7 +72,27 @@ export interface LeadSourceConfig {
 /** Overrides opcionales de mapeo (todo auto-detectable si está vacío). */
 export interface ColumnMapping {
   canonical?: Partial<Record<CanonicalField, string>>;
+  /** header normalizado -> nombre elegido para el custom field. */
   custom?: Record<string, string>;
+  /** headers normalizados que no se ingestan. */
+  ignore?: string[];
+  /** valor de lead_status (tal cual la hoja) -> pipeline_stages.id. */
+  statusToStage?: Record<string, string>;
+}
+
+/** Sugerencia de clasificación de una columna, para el wizard. */
+export interface ColumnSuggestion {
+  index: number;
+  header: string;
+  samples: string[];
+  kind: "canonical" | "custom" | "ignore";
+  field?: CanonicalField;
+  label?: string;
+}
+
+export interface MappingSuggestion {
+  columns: ColumnSuggestion[];
+  statusValues: string[];
 }
 
 export type CanonicalField =
