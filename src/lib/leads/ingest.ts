@@ -24,6 +24,23 @@ import type {
 export interface IngestOptions {
   /** Auto-asignar por least-loaded (config de la fuente). */
   autoAssign: boolean;
+  /** Mapa lead_status -> stage_id (config de la fuente). */
+  statusToStage?: Record<string, string>;
+}
+
+/** Resuelve la etapa para un lead_status: exacto, luego case-insensitive. */
+export function resolveStage(
+  statusRaw: string | null,
+  map?: Record<string, string>,
+): string | null {
+  if (!statusRaw || !map) return null;
+  const key = statusRaw.trim();
+  if (map[key]) return map[key];
+  const lower = key.toLowerCase();
+  for (const [k, v] of Object.entries(map)) {
+    if (k.trim().toLowerCase() === lower) return v;
+  }
+  return null;
 }
 
 /** Elige el asesor con menos deals abiertos; desempata al azar. */
@@ -71,13 +88,16 @@ export async function ingestLead(
 
   // 3. Deal (reusa el ya creado si estamos reanudando).
   let dealId = claimed.dealId;
+  let initialStageId = claimed.syncedStageId;
   if (!dealId) {
     const deal = await repo.createDeal({
       leadId: claimed.leadId,
       contactId,
       title: lead.name || lead.phoneRaw || "Lead de Meta",
+      stageId: resolveStage(lead.statusRaw, opts.statusToStage),
     });
     dealId = deal.id;
+    initialStageId = deal.stageId;
   }
 
   // 4. Asignación least-loaded (idempotente: solo si sin asignar).
@@ -95,6 +115,8 @@ export async function ingestLead(
     leadCreatedTime: lead.leadCreatedTime,
     rawPayload: lead.raw,
     phoneValid: lead.phoneValid,
+    sheetStatus: lead.statusRaw?.trim() || null,
+    syncedStageId: initialStageId,
   });
 
   return {

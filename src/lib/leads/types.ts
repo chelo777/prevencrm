@@ -126,6 +126,7 @@ export type IngestOutcome =
   | "processed"
   | "skipped_duplicate"
   | "resumed"
+  | "stage_synced"
   | "quarantined";
 
 export interface IngestResult {
@@ -134,7 +135,7 @@ export interface IngestResult {
   reason?: string;
 }
 
-/** Fila mínima de un lead reclamado, para decidir reanudación. */
+/** Fila mínima de un lead reclamado, para decidir reanudación/sync. */
 export interface ClaimedLead {
   leadId: string;
   status: "claimed" | "processed";
@@ -142,6 +143,10 @@ export interface ClaimedLead {
   isNew: boolean;
   dealId: string | null;
   contactId: string | null;
+  /** Último lead_status visto en la planilla (persistido). */
+  sheetStatus: string | null;
+  /** Última etapa aplicada por la sync; null = la planilla no controla. */
+  syncedStageId: string | null;
 }
 
 // ------------------------------------------------------------
@@ -175,7 +180,9 @@ export interface LeadRepository {
     leadId: string;
     contactId: string;
     title: string;
-  }): Promise<{ id: string }>;
+    /** Etapa inicial; si es null usa la default de la fuente. */
+    stageId?: string | null;
+  }): Promise<{ id: string; stageId: string }>;
 
   /** Marca contact_id en el lead reclamado (checkpoint de reanudación). */
   setLeadContact(leadId: string, contactId: string): Promise<void>;
@@ -186,7 +193,7 @@ export interface LeadRepository {
   /** Asigna el deal a un asesor solo si está sin asignar (idempotente). */
   assignDealIfUnassigned(dealId: string, userId: string): Promise<void>;
 
-  /** Cierra el lead: status='processed' + atribución + raw + phone_valid. */
+  /** Cierra el lead: status='processed' + atribución + raw + estado de hoja. */
   finalizeLead(
     leadId: string,
     data: {
@@ -194,7 +201,22 @@ export interface LeadRepository {
       leadCreatedTime: string | null;
       rawPayload: Record<string, string>;
       phoneValid: boolean;
+      sheetStatus: string | null;
+      syncedStageId: string | null;
     },
+  ): Promise<void>;
+
+  /** Etapa actual del deal (null si no existe). */
+  getDealStage(dealId: string): Promise<string | null>;
+
+  /** Mueve el deal de etapa (sync planilla→CRM). */
+  moveDealStage(dealId: string, stageId: string): Promise<void>;
+
+  /** Persiste el último estado visto en la hoja + quién controla. */
+  recordSheetStatus(
+    leadId: string,
+    sheetStatus: string | null,
+    syncedStageId: string | null,
   ): Promise<void>;
 
   /** Manda una fila no ingestable a cuarentena. */

@@ -121,10 +121,18 @@ describe("detección del meta_lead_id por contenido", () => {
 class FakeRepo implements LeadRepository {
   leads = new Map<
     string,
-    { leadId: string; metaLeadId: string; status: "claimed" | "processed"; contactId: string | null; dealId: string | null }
+    {
+      leadId: string;
+      metaLeadId: string;
+      status: "claimed" | "processed";
+      contactId: string | null;
+      dealId: string | null;
+      sheetStatus: string | null;
+      syncedStageId: string | null;
+    }
   >();
   contacts: { id: string; phone: string }[] = [];
-  deals: { id: string; assigned: string | null }[] = [];
+  deals: { id: string; assigned: string | null; stageId: string }[] = [];
   quarantined: { reason: string }[] = [];
   private seq = 0;
   private nid(p: string) {
@@ -140,12 +148,20 @@ class FakeRepo implements LeadRepository {
           isNew: false,
           dealId: l.dealId,
           contactId: l.contactId,
+          sheetStatus: l.sheetStatus,
+          syncedStageId: l.syncedStageId,
         };
       }
     }
     const leadId = this.nid("lead_");
-    this.leads.set(leadId, { leadId, metaLeadId, status: "claimed", contactId: null, dealId: null });
-    return { leadId, status: "claimed", isNew: true, dealId: null, contactId: null };
+    this.leads.set(leadId, {
+      leadId, metaLeadId, status: "claimed", contactId: null, dealId: null,
+      sheetStatus: null, syncedStageId: null,
+    });
+    return {
+      leadId, status: "claimed", isNew: true, dealId: null, contactId: null,
+      sheetStatus: null, syncedStageId: null,
+    };
   }
   async findOrCreateContact({ phoneE164 }: { phoneE164: string | null }) {
     const key = phoneE164 ?? "";
@@ -157,12 +173,13 @@ class FakeRepo implements LeadRepository {
   }
   async setCustomValues() {}
   async addNote() {}
-  async createDeal({ leadId }: { leadId: string }) {
+  async createDeal({ leadId, stageId }: { leadId: string; contactId: string; title: string; stageId?: string | null }) {
     const id = this.nid("deal_");
-    this.deals.push({ id, assigned: null });
+    const stage = stageId ?? "stage_default";
+    this.deals.push({ id, assigned: null, stageId: stage });
     const l = this.leads.get(leadId);
     if (l) l.dealId = id;
-    return { id };
+    return { id, stageId: stage };
   }
   async setLeadContact(leadId: string, contactId: string) {
     const l = this.leads.get(leadId);
@@ -178,9 +195,30 @@ class FakeRepo implements LeadRepository {
     const d = this.deals.find((x) => x.id === dealId);
     if (d && !d.assigned) d.assigned = userId;
   }
-  async finalizeLead(leadId: string) {
+  async finalizeLead(
+    leadId: string,
+    data: { sheetStatus: string | null; syncedStageId: string | null },
+  ) {
     const l = this.leads.get(leadId);
-    if (l) l.status = "processed";
+    if (l) {
+      l.status = "processed";
+      l.sheetStatus = data.sheetStatus;
+      l.syncedStageId = data.syncedStageId;
+    }
+  }
+  async getDealStage(dealId: string): Promise<string | null> {
+    return this.deals.find((d) => d.id === dealId)?.stageId ?? null;
+  }
+  async moveDealStage(dealId: string, stageId: string) {
+    const d = this.deals.find((x) => x.id === dealId);
+    if (d) d.stageId = stageId;
+  }
+  async recordSheetStatus(leadId: string, sheetStatus: string | null, syncedStageId: string | null) {
+    const l = this.leads.get(leadId);
+    if (l) {
+      l.sheetStatus = sheetStatus;
+      l.syncedStageId = syncedStageId;
+    }
   }
   async quarantine(_row: Record<string, string>, reason: string) {
     this.quarantined.push({ reason });
@@ -232,12 +270,43 @@ describe("ingestLead (claim-first)", () => {
     repo.leads.set("lead_x", {
       leadId: "lead_x", metaLeadId: "l:9", status: "claimed",
       contactId: "contact_prev", dealId: "deal_prev",
+      sheetStatus: null, syncedStageId: null,
     });
-    repo.deals.push({ id: "deal_prev", assigned: null });
+    repo.deals.push({ id: "deal_prev", assigned: null, stageId: "stage_default" });
     const res = await ingestLead(repo, makeLead("l:9"), { autoAssign: true });
     expect(res.outcome).toBe("resumed");
     expect(repo.deals).toHaveLength(1); // no se creó un segundo deal
     expect([...repo.leads.values()][0].status).toBe("processed");
+  });
+
+  it("usa la etapa mapeada por lead_status al crear el deal", async () => {
+    const repo = new FakeRepo();
+    const lead = { ...makeLead("l:20"), statusRaw: "calificado" };
+    await ingestLead(repo, lead, {
+      autoAssign: false,
+      statusToStage: { calificado: "stage_calificado" },
+    });
+    expect(repo.deals[0].stageId).toBe("stage_calificado");
+    const stored = [...repo.leads.values()][0];
+    expect(stored.sheetStatus).toBe("calificado");
+    expect(stored.syncedStageId).toBe("stage_calificado");
+  });
+
+  it("cae a la etapa default si el estado no está mapeado", async () => {
+    const repo = new FakeRepo();
+    const lead = { ...makeLead("l:21"), statusRaw: "algo-raro" };
+    await ingestLead(repo, lead, { autoAssign: false, statusToStage: {} });
+    expect(repo.deals[0].stageId).toBe("stage_default");
+  });
+
+  it("el lookup de estado es case-insensitive como fallback", async () => {
+    const repo = new FakeRepo();
+    const lead = { ...makeLead("l:22"), statusRaw: "Calificado" };
+    await ingestLead(repo, lead, {
+      autoAssign: false,
+      statusToStage: { calificado: "stage_calificado" },
+    });
+    expect(repo.deals[0].stageId).toBe("stage_calificado");
   });
 });
 
