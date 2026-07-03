@@ -78,7 +78,7 @@ export function createLeadRepository(
           },
           { onConflict: "account_id,meta_lead_id", ignoreDuplicates: true },
         )
-        .select("id, status, contact_id, deal_id");
+        .select("id, status, contact_id, deal_id, sheet_status, synced_stage_id");
       if (error) throw error;
 
       if (inserted && inserted.length > 0) {
@@ -89,13 +89,15 @@ export function createLeadRepository(
           isNew: true,
           dealId: (row.deal_id as string | null) ?? null,
           contactId: (row.contact_id as string | null) ?? null,
+          sheetStatus: (row.sheet_status as string | null) ?? null,
+          syncedStageId: (row.synced_stage_id as string | null) ?? null,
         };
       }
 
       // Conflicto: ya existía. Traer el estado actual para reanudar/saltar.
       const { data: found, error: findErr } = await admin
         .from("leads")
-        .select("id, status, contact_id, deal_id")
+        .select("id, status, contact_id, deal_id, sheet_status, synced_stage_id")
         .eq("account_id", accountId)
         .eq("meta_lead_id", metaLeadId)
         .single();
@@ -106,6 +108,8 @@ export function createLeadRepository(
         isNew: false,
         dealId: (found.deal_id as string | null) ?? null,
         contactId: (found.contact_id as string | null) ?? null,
+        sheetStatus: (found.sheet_status as string | null) ?? null,
+        syncedStageId: (found.synced_stage_id as string | null) ?? null,
       };
     },
 
@@ -168,14 +172,15 @@ export function createLeadRepository(
       if (error) throw error;
     },
 
-    async createDeal({ leadId, contactId, title }) {
+    async createDeal({ leadId, contactId, title, stageId }) {
+      const stage = stageId ?? defaultStageId;
       const { data, error } = await admin
         .from("deals")
         .insert({
           account_id: accountId,
           user_id: ownerUserId,
           pipeline_id: pipelineId,
-          stage_id: defaultStageId,
+          stage_id: stage,
           contact_id: contactId,
           title: title || "Lead de Meta",
           value: 0,
@@ -188,7 +193,7 @@ export function createLeadRepository(
 
       // Checkpoint de reanudación: linkear el deal al lead enseguida.
       await admin.from("leads").update({ deal_id: data.id }).eq("id", leadId);
-      return { id: data.id as string };
+      return { id: data.id as string, stageId: stage };
     },
 
     async setLeadContact(leadId, contactId) {
@@ -239,6 +244,36 @@ export function createLeadRepository(
       if (error) throw error;
     },
 
+    async getDealStage(dealId) {
+      const { data, error } = await admin
+        .from("deals")
+        .select("stage_id")
+        .eq("id", dealId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data?.stage_id as string | null) ?? null;
+    },
+
+    async moveDealStage(dealId, stageId) {
+      const { error } = await admin
+        .from("deals")
+        .update({ stage_id: stageId, updated_at: new Date().toISOString() })
+        .eq("id", dealId);
+      if (error) throw error;
+    },
+
+    async recordSheetStatus(leadId, sheetStatus, syncedStageId) {
+      const { error } = await admin
+        .from("leads")
+        .update({
+          sheet_status: sheetStatus,
+          synced_stage_id: syncedStageId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", leadId);
+      if (error) throw error;
+    },
+
     async finalizeLead(leadId, data) {
       const a: LeadAttribution = data.attribution;
       const { error } = await admin
@@ -246,6 +281,8 @@ export function createLeadRepository(
         .update({
           status: "processed",
           phone_valid: data.phoneValid,
+          sheet_status: data.sheetStatus,
+          synced_stage_id: data.syncedStageId,
           platform: a.platform,
           is_organic: a.isOrganic,
           campaign_id: a.campaignId,
@@ -313,6 +350,7 @@ export interface SyncRunTotals {
   claimed: number;
   processed: number;
   quarantined: number;
+  stageSynced: number;
   errors: number;
   ok: boolean;
   message?: string;
@@ -334,6 +372,7 @@ export async function recordSyncRun(
     claimed: totals.claimed,
     processed: totals.processed,
     quarantined: totals.quarantined,
+    stage_synced: totals.stageSynced,
     errors: totals.errors,
     ok: totals.ok,
     message: totals.message ?? null,

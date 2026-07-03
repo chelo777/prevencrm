@@ -54,6 +54,7 @@ export async function GET(request: Request) {
       claimed: 0,
       processed: 0,
       quarantined: 0,
+      stageSynced: 0,
       errors: 0,
       ok: true,
     };
@@ -82,12 +83,15 @@ export async function GET(request: Request) {
           }
           const result = await ingestLead(repo, lead, {
             autoAssign: source.autoAssign,
+            statusToStage: source.columnMapping.statusToStage,
           });
           if (result.outcome === "processed") {
             totals.claimed++;
             totals.processed++;
           } else if (result.outcome === "resumed") {
             totals.processed++;
+          } else if (result.outcome === "stage_synced") {
+            totals.stageSynced++;
           }
           // "skipped_duplicate" -> ya estaba, no cuenta.
         } catch (rowErr) {
