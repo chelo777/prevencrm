@@ -16,6 +16,7 @@
 
 import type {
   AssignableAgent,
+  ClaimedLead,
   IngestResult,
   LeadRepository,
   NormalizedLead,
@@ -61,7 +62,7 @@ export async function ingestLead(
   // 1. CLAIM — reserva la clave antes de crear nada.
   const claimed = await repo.claimLead(lead.metaLeadId);
   if (!claimed.isNew && claimed.status === "processed") {
-    return { outcome: "skipped_duplicate", leadId: claimed.leadId };
+    return syncSheetStage(repo, claimed, lead, opts);
   }
   const resuming = !claimed.isNew;
 
@@ -123,4 +124,49 @@ export async function ingestLead(
     outcome: resuming ? "resumed" : "processed",
     leadId: claimed.leadId,
   };
+}
+
+/**
+ * Lead ya procesado: si el lead_status de la hoja cambió, refleja el
+ * cambio en la etapa del deal — salvo que un humano ya lo haya movido
+ * en el Kanban (deal.stage != synced_stage), en cuyo caso la planilla
+ * pierde el control de ese deal para siempre (synced_stage = null).
+ */
+async function syncSheetStage(
+  repo: LeadRepository,
+  claimed: ClaimedLead,
+  lead: NormalizedLead,
+  opts: IngestOptions,
+): Promise<IngestResult> {
+  const skipped: IngestResult = { outcome: "skipped_duplicate", leadId: claimed.leadId };
+  const status = lead.statusRaw?.trim() || null;
+  if (!status || status === (claimed.sheetStatus ?? "")) return skipped;
+  if (!claimed.dealId) return skipped;
+
+  // Control manual permanente (o legado sin tracking).
+  if (!claimed.syncedStageId) {
+    await repo.recordSheetStatus(claimed.leadId, status, null);
+    return { ...skipped, reason: "deal en control manual" };
+  }
+
+  const target = resolveStage(status, opts.statusToStage);
+  if (!target) {
+    await repo.recordSheetStatus(claimed.leadId, status, claimed.syncedStageId);
+    return { ...skipped, reason: "estado sin mapeo" };
+  }
+
+  const current = await repo.getDealStage(claimed.dealId);
+  if (current !== claimed.syncedStageId) {
+    // Alguien lo movió en el CRM: la planilla deja de mandar.
+    await repo.recordSheetStatus(claimed.leadId, status, null);
+    return { ...skipped, reason: "deal en control manual" };
+  }
+  if (current === target) {
+    await repo.recordSheetStatus(claimed.leadId, status, target);
+    return skipped;
+  }
+
+  await repo.moveDealStage(claimed.dealId, target);
+  await repo.recordSheetStatus(claimed.leadId, status, target);
+  return { outcome: "stage_synced", leadId: claimed.leadId };
 }

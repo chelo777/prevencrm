@@ -323,6 +323,85 @@ describe("pickLeastLoaded", () => {
   });
 });
 
+describe("sync de estados planilla→CRM (leads procesados)", () => {
+  const MAP = {
+    CREATED: "stage_nuevo",
+    calificado: "stage_calificado",
+    "closed-won": "stage_won",
+  };
+  async function seedProcessed(repo: FakeRepo, status: string, stage: string) {
+    await ingestLead(repo, { ...makeLead("l:50"), statusRaw: status }, {
+      autoAssign: false,
+      statusToStage: MAP,
+    });
+    expect(repo.deals[0].stageId).toBe(stage);
+  }
+
+  it("mueve el deal cuando el estado cambia en la hoja", async () => {
+    const repo = new FakeRepo();
+    await seedProcessed(repo, "CREATED", "stage_nuevo");
+    const res = await ingestLead(
+      repo,
+      { ...makeLead("l:50"), statusRaw: "calificado" },
+      { autoAssign: false, statusToStage: MAP },
+    );
+    expect(res.outcome).toBe("stage_synced");
+    expect(repo.deals[0].stageId).toBe("stage_calificado");
+    expect([...repo.leads.values()][0].sheetStatus).toBe("calificado");
+    expect([...repo.leads.values()][0].syncedStageId).toBe("stage_calificado");
+  });
+
+  it("no mueve nada si el estado no cambió", async () => {
+    const repo = new FakeRepo();
+    await seedProcessed(repo, "CREATED", "stage_nuevo");
+    const res = await ingestLead(
+      repo,
+      { ...makeLead("l:50"), statusRaw: "CREATED" },
+      { autoAssign: false, statusToStage: MAP },
+    );
+    expect(res.outcome).toBe("skipped_duplicate");
+    expect(repo.deals[0].stageId).toBe("stage_nuevo");
+  });
+
+  it("si un humano movió el deal en el Kanban, la planilla pierde el control", async () => {
+    const repo = new FakeRepo();
+    await seedProcessed(repo, "CREATED", "stage_nuevo");
+    repo.deals[0].stageId = "stage_cotizado"; // movimiento manual en el CRM
+    const res = await ingestLead(
+      repo,
+      { ...makeLead("l:50"), statusRaw: "calificado" },
+      { autoAssign: false, statusToStage: MAP },
+    );
+    expect(res.outcome).toBe("skipped_duplicate");
+    expect(repo.deals[0].stageId).toBe("stage_cotizado"); // no lo pisó
+    const stored = [...repo.leads.values()][0];
+    expect(stored.sheetStatus).toBe("calificado"); // igual registra lo visto
+    expect(stored.syncedStageId).toBeNull(); // control manual permanente
+    // y una pasada posterior tampoco lo toca
+    const res2 = await ingestLead(
+      repo,
+      { ...makeLead("l:50"), statusRaw: "closed-won" },
+      { autoAssign: false, statusToStage: MAP },
+    );
+    expect(res2.outcome).toBe("skipped_duplicate");
+    expect(repo.deals[0].stageId).toBe("stage_cotizado");
+  });
+
+  it("estado sin mapeo: registra sheet_status pero no mueve", async () => {
+    const repo = new FakeRepo();
+    await seedProcessed(repo, "CREATED", "stage_nuevo");
+    const res = await ingestLead(
+      repo,
+      { ...makeLead("l:50"), statusRaw: "perdido" }, // no está en MAP
+      { autoAssign: false, statusToStage: MAP },
+    );
+    expect(res.outcome).toBe("skipped_duplicate");
+    expect(res.reason).toBe("estado sin mapeo");
+    expect(repo.deals[0].stageId).toBe("stage_nuevo");
+    expect([...repo.leads.values()][0].sheetStatus).toBe("perdido");
+  });
+});
+
 // ============================================================
 // mapping.ts — renombres custom, ignore y suggestMapping (wizard)
 // ============================================================
