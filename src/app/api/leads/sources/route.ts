@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
+import type { ColumnMapping } from "@/lib/leads/types";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Alta de una fuente de leads (una hoja de Google). Seed manual (el
- * asistente visual es Fase 2). Asegura el pipeline "Leads Prepaga" y
- * crea la fila en lead_sources apuntando a su etapa "Nuevo".
+ * Alta de una fuente de leads (una pestaña de una hoja de Google).
+ * El wizard manda el columnMapping completo (canonical/custom/ignore/
+ * statusToStage); el alta manual mínima sigue funcionando sin él.
  *
- * Body JSON: { name, spreadsheetId, sheetGid?, autoAssign? }
+ * Body JSON: { name, spreadsheetId, sheetGid?, autoAssign?, columnMapping? }
  */
 export async function POST(request: Request) {
   try {
@@ -18,6 +19,7 @@ export async function POST(request: Request) {
       spreadsheetId?: string;
       sheetGid?: string | null;
       autoAssign?: boolean;
+      columnMapping?: ColumnMapping;
     };
 
     const name = (body.name ?? "").trim();
@@ -56,6 +58,25 @@ export async function POST(request: Request) {
       );
     }
 
+    // Validar statusToStage: toda etapa debe pertenecer al pipeline.
+    const mapping: ColumnMapping = body.columnMapping ?? {};
+    const mappedStageIds = Object.values(mapping.statusToStage ?? {});
+    if (mappedStageIds.length > 0) {
+      const { data: valid } = await ctx.supabase
+        .from("pipeline_stages")
+        .select("id")
+        .eq("pipeline_id", pipelineId)
+        .in("id", mappedStageIds);
+      const validIds = new Set((valid ?? []).map((s) => s.id as string));
+      const invalid = mappedStageIds.filter((id) => !validIds.has(id));
+      if (invalid.length > 0) {
+        return NextResponse.json(
+          { error: "statusToStage contiene etapas que no son del pipeline de leads" },
+          { status: 400 },
+        );
+      }
+    }
+
     const { data: source, error: insErr } = await ctx.supabase
       .from("lead_sources")
       .insert({
@@ -65,6 +86,7 @@ export async function POST(request: Request) {
         kind: "google_sheet",
         spreadsheet_id: spreadsheetId,
         sheet_gid: body.sheetGid ?? null,
+        column_mapping: mapping,
         pipeline_id: pipelineId,
         default_stage_id: stage.id,
         auto_assign: body.autoAssign ?? true,
@@ -72,6 +94,12 @@ export async function POST(request: Request) {
       .select("id, name")
       .single();
     if (insErr) {
+      if (insErr.code === "23505") {
+        return NextResponse.json(
+          { error: "Esa pestaña ya tiene una fuente activa en esta cuenta" },
+          { status: 409 },
+        );
+      }
       console.error("[leads/sources] insert error:", insErr);
       return NextResponse.json(
         { error: "no se pudo crear la fuente" },
