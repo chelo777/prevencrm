@@ -10,9 +10,11 @@ Diseño completo: [`docs/superpowers/specs/2026-07-01-modulo-leads-meta-design-v
 
 ## 1. Migración
 
-Aplicar la migración `supabase/migrations/029_leads_meta.sql` (crea
-`lead_sources`, `leads`, `lead_capi_events`, `lead_intake_errors`,
-`lead_capi_config`, `lead_sync_runs`; extiende `deals` y `notifications`).
+Aplicar las migraciones `029_leads_meta.sql` (crea `lead_sources`, `leads`,
+`lead_capi_events`, `lead_intake_errors`, `lead_capi_config`,
+`lead_sync_runs`; extiende `deals` y `notifications`) y
+`030_lead_source_wizard.sql` (columnas de sync de estados en `leads`,
+contador `stage_synced` e índice único de fuentes activas).
 
 ```bash
 supabase db push        # o el flujo de migraciones que uses
@@ -39,11 +41,30 @@ Ver `.env.leads.example`. Resumen:
 3. **Compartí cada hoja** (permiso *Lector*) con el email del service account
    (`...@....iam.gserviceaccount.com`). Sin esto, la lectura falla con 403.
 
-## 4. Dar de alta una fuente
+## 4. Dar de alta una fuente (wizard)
 
-UI: **Leads → Fuentes → Agregar una hoja**. Pegá la URL completa de la hoja
-(se extraen `spreadsheetId` y `gid` solos) y un nombre. Al crear la primera
-fuente se crea (idempotente) el pipeline **"Leads Prepaga"** con sus etapas.
+UI: **Leads → Fuentes → Agregar una hoja**. Es un wizard de 3 pasos:
+
+1. **URL y pestaña** — pegás la URL completa; se listan todas las pestañas del
+   documento (las que ya tienen fuente aparecen marcadas). Una fuente = una
+   pestaña.
+2. **Columnas** — cada columna real se muestra con valores de ejemplo y su
+   clasificación sugerida: campo del CRM, **campo personalizado con el nombre
+   que elijas** (así los datos quedan consistentes entre formularios), o
+   ignorar.
+3. **Estados → etapas** — cada valor de `lead_status` de la hoja se mapea a una
+   etapa del embudo (sugerencia automática: CREATED→Nuevo, calificado→
+   Calificado, etc.).
+
+Al crear la primera fuente se crea (idempotente) el pipeline **"Leads
+Prepaga"** con sus etapas. Si el documento tiene otra pestaña con datos sin
+fuente, el wizard ofrece agregarla a continuación.
+
+**Sync de estados**: si el comprador cambia el `lead_status` en la hoja
+*después* de la ingesta, el cron mueve el deal a la etapa mapeada — salvo que
+alguien ya lo haya movido a mano en el Kanban (en ese caso el CRM manda y la
+planilla deja de controlar ese deal). `closed-won` llegando a su etapa dispara
+el evento CAPI como cualquier deal.
 
 > El `id` del lead (`l:...`) se detecta **por contenido**, no por header —
 > resiste headers corruptos y columnas `id` vacías (caso real de una de las
