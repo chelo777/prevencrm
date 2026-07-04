@@ -40,7 +40,31 @@ export async function POST(request: Request) {
     try {
       tabs = await fetchSpreadsheetTabs(spreadsheetId);
     } catch (err) {
+      console.error("[leads/preview] error leyendo la planilla:", err);
       const msg = err instanceof Error ? err.message : String(err);
+      // Config del service account rota: JSON truncado/multilínea o incompleto.
+      if (err instanceof SyntaxError || msg.includes("GOOGLE_SERVICE_ACCOUNT_JSON")) {
+        return NextResponse.json(
+          {
+            error:
+              "GOOGLE_SERVICE_ACCOUNT_JSON no es un JSON válido. Pegala en UNA sola línea " +
+              "(compactá el archivo con: node -e \"console.log(JSON.stringify(require('./clave.json')))\") " +
+              "y redeployá.",
+          },
+          { status: 503 },
+        );
+      }
+      // Google rechazó las credenciales (key inválida/revocada).
+      if (msg.includes("Google token error")) {
+        return NextResponse.json(
+          {
+            error:
+              "Google rechazó las credenciales del service account. Verificá que la key JSON " +
+              "sea la descargada de Google Cloud, completa y vigente.",
+          },
+          { status: 502 },
+        );
+      }
       if (msg.includes(" 403")) {
         const email = getServiceAccountEmail();
         return NextResponse.json(
