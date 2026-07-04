@@ -185,7 +185,8 @@ export function createLeadRepository(
           title: title || "Lead de Meta",
           value: 0,
           currency: DEAL_CURRENCY,
-          status: "active",
+          // 002 restringe deals.status a open/won/lost.
+          status: "open",
         })
         .select("id")
         .single();
@@ -220,7 +221,7 @@ export function createLeadRepository(
         .select("assigned_agent_id")
         .eq("account_id", accountId)
         .eq("pipeline_id", pipelineId)
-        .eq("status", "active")
+        .eq("status", "open")
         .not("assigned_agent_id", "is", null);
 
       const counts = new Map<string, number>();
