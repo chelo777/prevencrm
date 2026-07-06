@@ -3,6 +3,7 @@ import { normalizeArgentinePhone, toWhatsAppNumber } from "./phone";
 import { createLeadMapper, detectColumnByContent, suggestMapping } from "./mapping";
 import { parseSheetUrl } from "./sheet-url";
 import { mapApiLead } from "./meta-api";
+import { buildEventPayload } from "./capi";
 import { ingestLead, pickLeastLoaded } from "./ingest";
 import type {
   AssignableAgent,
@@ -524,6 +525,42 @@ describe("mapApiLead", () => {
     expect(lead.metaLeadId).toBe("l:99");
     expect(lead.phoneE164).toBe("+543624101510"); // recuperó el 54
     expect(lead.phoneValid).toBe(true);
+  });
+});
+
+// ============================================================
+// capi.ts — payload de Conversion Leads (evento custom + lead_id)
+// ============================================================
+describe("buildEventPayload (CAPI)", () => {
+  it("incluye lead_id numérico y el evento custom closed-won", () => {
+    const p = buildEventPayload({
+      datasetId: "796135859815097",
+      accessToken: "x",
+      eventName: "closed-won",
+      eventId: "lead_1:closed-won",
+      eventTimeSec: 1751800000,
+      userData: { em: ["hash_email"] },
+      leadId: "l:1053045053958358",
+    });
+    const ev = p.data[0] as Record<string, unknown>;
+    expect(ev.event_name).toBe("closed-won");
+    expect(ev.action_source).toBe("system_generated");
+    const ud = ev.user_data as Record<string, unknown>;
+    expect(ud.lead_id).toBe(1053045053958358); // sin prefijo l:, numérico
+    expect(ud.em).toEqual(["hash_email"]);
+  });
+
+  it("sin leadId no agrega lead_id (retrocompatible)", () => {
+    const p = buildEventPayload({
+      datasetId: "d",
+      accessToken: "x",
+      eventName: "Lead",
+      eventId: "e",
+      eventTimeSec: 1,
+      userData: {},
+    });
+    const ud = (p.data[0] as Record<string, unknown>).user_data as Record<string, unknown>;
+    expect(ud.lead_id).toBeUndefined();
   });
 });
 

@@ -70,6 +70,36 @@ export interface SendConversionInput {
   eventId: string;
   eventTimeSec: number;
   userData: Record<string, string[]>;
+  /** meta_lead_id del lead (acepta prefijo "l:"). Obligatorio para la
+   *  optimización Conversion Leads: ata el evento al lead/anuncio exacto. */
+  leadId?: string | null;
+}
+
+/** Payload del evento (puro, testeable). */
+export function buildEventPayload(input: SendConversionInput): {
+  data: Record<string, unknown>[];
+} {
+  const user_data: Record<string, unknown> = { ...input.userData };
+  if (input.leadId) {
+    const numeric = input.leadId.replace(/^l:/i, "").trim();
+    if (/^\d+$/.test(numeric)) {
+      // Meta espera un entero; si excede la precisión segura de JS se
+      // manda como string (Meta lo tolera y evita corromper el id).
+      const n = Number(numeric);
+      user_data.lead_id = Number.isSafeInteger(n) ? n : numeric;
+    }
+  }
+  return {
+    data: [
+      {
+        event_name: input.eventName,
+        event_time: input.eventTimeSec,
+        event_id: input.eventId, // dedup server-side
+        action_source: "system_generated",
+        user_data,
+      },
+    ],
+  };
 }
 
 export interface SendConversionResult {
@@ -86,17 +116,7 @@ export async function sendConversion(
     input.datasetId,
   )}/events?access_token=${encodeURIComponent(input.accessToken)}`;
 
-  const payload = {
-    data: [
-      {
-        event_name: input.eventName,
-        event_time: input.eventTimeSec,
-        event_id: input.eventId, // dedup server-side
-        action_source: "system_generated",
-        user_data: input.userData,
-      },
-    ],
-  };
+  const payload = buildEventPayload(input);
 
   const res = await fetch(url, {
     method: "POST",
@@ -171,7 +191,7 @@ export async function reconcileCapiForAccount(
   // Leads de esos deals.
   const { data: leads } = await admin
     .from("leads")
-    .select("id, deal_id, contact_id")
+    .select("id, deal_id, contact_id, meta_lead_id")
     .eq("account_id", config.account_id)
     .in("deal_id", dealIds);
 
@@ -233,6 +253,7 @@ export async function reconcileCapiForAccount(
       eventId,
       eventTimeSec: Math.floor(Date.now() / 1000),
       userData: buildUserData(capiContact),
+      leadId: (lead.meta_lead_id as string | null) ?? null,
     });
 
     await admin
@@ -258,7 +279,10 @@ export async function reconcileAllCapi(
   admin: SupabaseClient,
 ): Promise<CapiReconcileTotals> {
   const totals: CapiReconcileTotals = { candidates: 0, sent: 0, failed: 0, skipped: 0 };
-  const accessToken = process.env.META_CAPI_ACCESS_TOKEN;
+  // Fallback: el token de leads (system user con ads_management) sirve
+  // también para CAPI si el dataset es un activo del mismo negocio.
+  const accessToken =
+    process.env.META_CAPI_ACCESS_TOKEN ?? process.env.META_LEADS_ACCESS_TOKEN;
   if (!accessToken) return totals; // CAPI no configurada — no-op silencioso.
 
   const { data: configs } = await admin
