@@ -32,7 +32,7 @@ export function normalizeHeader(h: string): string {
 }
 
 /** Diccionarios de headers canónicos (ya normalizados). */
-const HEADER_DICT: Record<string, string[]> = {
+export const HEADER_DICT: Record<string, string[]> = {
   name: ["full_name", "name", "nombre", "nombre_completo", "nombre_y_apellido"],
   email: ["email", "e-mail", "e_mail", "correo", "correo_electronico"],
   phone: ["phone_number", "phone", "telefono", "teléfono", "celular", "whatsapp"],
@@ -123,7 +123,7 @@ function headerIndex(
 }
 
 /** De-slugifica un header a etiqueta legible para el custom field. */
-function toLabel(header: string): string {
+export function toLabel(header: string): string {
   return (header ?? "")
     .replace(/[¿?¡!]/g, "")
     .replace(/_/g, " ")

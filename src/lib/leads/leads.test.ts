@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { normalizeArgentinePhone, toWhatsAppNumber } from "./phone";
 import { createLeadMapper, detectColumnByContent, suggestMapping } from "./mapping";
 import { parseSheetUrl } from "./sheet-url";
+import { mapApiLead } from "./meta-api";
 import { ingestLead, pickLeastLoaded } from "./ingest";
 import type {
   AssignableAgent,
@@ -455,6 +456,74 @@ describe("suggestMapping (wizard)", () => {
     expect(s.statusValues.sort()).toEqual(["CREATED", "calificado"]);
     // la columna decoy "id" (vacía) no debe sugerirse como metaLeadId
     expect(byHeader["id"]?.field).not.toBe("metaLeadId");
+  });
+});
+
+// ============================================================
+// meta-api.ts — mapeo de un lead crudo de la Graph API
+// ============================================================
+describe("mapApiLead", () => {
+  // Estructura real verificada en vivo (2026-07-06), valores de fantasía.
+  const RAW = {
+    id: "1053045053958358",
+    created_time: "2026-07-03T12:43:00+0000",
+    ad_id: "120248319395160383",
+    ad_name: "Ad Video Testimonio",
+    adset_id: "120248319395110383",
+    adset_name: "Conjunto CBA 25-45",
+    campaign_id: "120248319395100383",
+    campaign_name: "Leads Salud Julio",
+    form_id: "833520326281165",
+    is_organic: false,
+    platform: "ig",
+    field_data: [
+      { name: "¿para_cuántas_personas_buscás_cobertura?", values: ["para mí y mi familia"] },
+      { name: "¿qué_edad_tenés?", values: ["entre_30_y_40"] },
+      { name: "full_name", values: ["Cecilia Prueba"] },
+      { name: "phone_number", values: ["+543795586866"] },
+      { name: "city", values: ["Corrientes"] },
+      { name: "código_postal", values: ["3400"] },
+    ],
+  };
+
+  it("mapea un lead real de la API a NormalizedLead", () => {
+    const lead = mapApiLead(RAW, "Form Dependencia-Monotrib 2026 - Loc Fabi (v1)");
+    expect(lead.metaLeadId).toBe("l:1053045053958358"); // dedupe con planillas
+    expect(lead.name).toBe("Cecilia Prueba");
+    expect(lead.phoneE164).toBe("+543795586866");
+    expect(lead.phoneValid).toBe(true);
+    expect(lead.customFields["Ciudad"]).toBe("Corrientes");
+    expect(lead.customFields["Código Postal"]).toBe("3400");
+    expect(lead.customFields["qué edad tenés"]).toBe("entre_30_y_40");
+    expect(lead.attribution.campaignName).toBe("Leads Salud Julio");
+    expect(lead.attribution.formId).toBe("833520326281165");
+    expect(lead.attribution.formName).toBe("Form Dependencia-Monotrib 2026 - Loc Fabi (v1)");
+    expect(lead.attribution.isOrganic).toBe(false);
+    expect(lead.attribution.platform).toBe("ig");
+    expect(lead.leadCreatedTime).toBe("2026-07-03T12:43:00.000Z");
+    expect(lead.statusRaw).toBeNull(); // la API no trae estado: manda el CRM
+  });
+
+  it("respeta renombres e ignore del column_mapping", () => {
+    const lead = mapApiLead(RAW, null, {
+      custom: { "¿qué_edad_tenés?": "Edad" },
+      ignore: ["¿para_cuántas_personas_buscás_cobertura?"],
+    });
+    expect(lead.customFields["Edad"]).toBe("entre_30_y_40");
+    expect(lead.customFields["qué edad tenés"]).toBeUndefined();
+    expect(Object.values(lead.customFields)).not.toContain("para mí y mi familia");
+  });
+
+  it("normaliza teléfonos AR malformados y marca inválidos", () => {
+    const raw = {
+      ...RAW,
+      id: "99",
+      field_data: [{ name: "phone_number", values: ["3624101510"] }],
+    };
+    const lead = mapApiLead(raw, null);
+    expect(lead.metaLeadId).toBe("l:99");
+    expect(lead.phoneE164).toBe("+543624101510"); // recuperó el 54
+    expect(lead.phoneValid).toBe(true);
   });
 });
 
