@@ -6,6 +6,7 @@ import {
   loadActiveMetaApiSources,
   metaSourceAsLeadSource,
   recordSyncRun,
+  type MetaApiSourceConfig,
   type SyncRunTotals,
 } from "@/lib/leads/repository";
 import { fetchSheetRows } from "@/lib/leads/google-sheets";
@@ -121,7 +122,7 @@ export async function GET(request: Request) {
   // ------------------------------------------------------------
   // Fuentes meta_api: polling directo a la Graph API.
   // ------------------------------------------------------------
-  let metaSources;
+  let metaSources: MetaApiSourceConfig[];
   try {
     metaSources = await loadActiveMetaApiSources(admin);
   } catch (err) {
