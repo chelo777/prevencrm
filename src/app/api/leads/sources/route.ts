@@ -16,17 +16,28 @@ export async function POST(request: Request) {
     const ctx = await requireRole("admin");
     const body = (await request.json()) as {
       name?: string;
+      kind?: "google_sheet" | "meta_api";
       spreadsheetId?: string;
       sheetGid?: string | null;
+      metaPageId?: string;
+      metaFormIds?: string[];
       autoAssign?: boolean;
       columnMapping?: ColumnMapping;
     };
 
+    const kind = body.kind === "meta_api" ? "meta_api" : "google_sheet";
     const name = (body.name ?? "").trim();
     const spreadsheetId = (body.spreadsheetId ?? "").trim();
-    if (!name || !spreadsheetId) {
+    const metaPageId = (body.metaPageId ?? "").trim();
+    if (!name || (kind === "google_sheet" && !spreadsheetId)) {
       return NextResponse.json(
         { error: "name y spreadsheetId son obligatorios" },
+        { status: 400 },
+      );
+    }
+    if (kind === "meta_api" && !metaPageId) {
+      return NextResponse.json(
+        { error: "metaPageId es obligatorio para fuentes meta_api" },
         { status: 400 },
       );
     }
@@ -83,9 +94,11 @@ export async function POST(request: Request) {
         account_id: ctx.accountId,
         owner_user_id: ctx.userId,
         name,
-        kind: "google_sheet",
-        spreadsheet_id: spreadsheetId,
-        sheet_gid: body.sheetGid ?? null,
+        kind,
+        spreadsheet_id: kind === "google_sheet" ? spreadsheetId : null,
+        sheet_gid: kind === "google_sheet" ? (body.sheetGid ?? null) : null,
+        meta_page_id: kind === "meta_api" ? metaPageId : null,
+        meta_form_ids: kind === "meta_api" ? (body.metaFormIds ?? []) : [],
         column_mapping: mapping,
         pipeline_id: pipelineId,
         default_stage_id: stage.id,
@@ -96,7 +109,12 @@ export async function POST(request: Request) {
     if (insErr) {
       if (insErr.code === "23505") {
         return NextResponse.json(
-          { error: "Esa pestaña ya tiene una fuente activa en esta cuenta" },
+          {
+            error:
+              kind === "meta_api"
+                ? "Esa página ya tiene una fuente activa en esta cuenta"
+                : "Esa pestaña ya tiene una fuente activa en esta cuenta",
+          },
           { status: 409 },
         );
       }

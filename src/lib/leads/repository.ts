@@ -14,10 +14,10 @@ import { findExistingContact, isUniqueViolation } from "@/lib/contacts/dedupe";
 import type {
   AssignableAgent,
   ClaimedLead,
+  ColumnMapping,
   LeadAttribution,
   LeadRepository,
   LeadSourceConfig,
-  ColumnMapping,
 } from "./types";
 
 const DEAL_CURRENCY = "ARS";
@@ -341,6 +341,70 @@ export async function loadActiveGoogleSheetSources(
     defaultStageId: r.default_stage_id as string,
     autoAssign: (r.auto_assign as boolean) ?? true,
   }));
+}
+
+// ------------------------------------------------------------
+// Fuentes meta_api (polling directo a la Graph API).
+// ------------------------------------------------------------
+export interface MetaApiSourceConfig {
+  id: string;
+  accountId: string;
+  ownerUserId: string;
+  name: string;
+  pageId: string;
+  /** Ids elegidos; [] = todos los formularios ACTIVE de la página. */
+  formIds: string[];
+  columnMapping: ColumnMapping;
+  pipelineId: string;
+  defaultStageId: string;
+  autoAssign: boolean;
+}
+
+export async function loadActiveMetaApiSources(
+  admin: SupabaseClient,
+): Promise<MetaApiSourceConfig[]> {
+  const { data, error } = await admin
+    .from("lead_sources")
+    .select(
+      "id, account_id, owner_user_id, name, meta_page_id, meta_form_ids, column_mapping, pipeline_id, default_stage_id, auto_assign",
+    )
+    .eq("kind", "meta_api")
+    .eq("active", true);
+  if (error) throw error;
+
+  return (data ?? []).flatMap((r) => {
+    if (!r.meta_page_id) return [];
+    return [
+      {
+        id: r.id as string,
+        accountId: r.account_id as string,
+        ownerUserId: r.owner_user_id as string,
+        name: r.name as string,
+        pageId: r.meta_page_id as string,
+        formIds: Array.isArray(r.meta_form_ids) ? (r.meta_form_ids as string[]) : [],
+        columnMapping: (r.column_mapping as ColumnMapping) ?? {},
+        pipelineId: r.pipeline_id as string,
+        defaultStageId: r.default_stage_id as string,
+        autoAssign: (r.auto_assign as boolean) ?? true,
+      },
+    ];
+  });
+}
+
+/** Adapta una fuente meta_api al shape que espera createLeadRepository. */
+export function metaSourceAsLeadSource(s: MetaApiSourceConfig): LeadSourceConfig {
+  return {
+    id: s.id,
+    accountId: s.accountId,
+    ownerUserId: s.ownerUserId,
+    name: s.name,
+    spreadsheetId: null,
+    sheetGid: null,
+    columnMapping: s.columnMapping,
+    pipelineId: s.pipelineId,
+    defaultStageId: s.defaultStageId,
+    autoAssign: s.autoAssign,
+  };
 }
 
 // ------------------------------------------------------------
