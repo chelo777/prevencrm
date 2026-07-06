@@ -134,3 +134,21 @@ anti-duplicados (con repo fake en memoria).
 | `src/app/api/leads/contacted/route.ts` | Traza de click-to-chat. |
 | `src/app/api/leads/import-historico/route.ts` | Import histórico. |
 | `src/app/(dashboard)/leads/*` | Bandeja + fuentes (UI). |
+
+## 8. Fuente directa Meta API (sin Google)
+
+Desde la migración 031 existe el kind `meta_api`: el cron pide los leads
+directamente a la Graph API (polling cada ciclo), sin planilla intermedia.
+
+- **Env**: `META_LEADS_ACCESS_TOKEN` = token de **system user** del Business
+  Manager (no expira) con `leads_retrieval` + la página asignada como activo.
+  Requisito de Meta: el acceso a leads de la página debe permitir a la app
+  (Business Suite → Configuración → Acceso a clientes potenciales).
+- **Alta**: Leads → Fuentes → "Meta directo" → pegar el ID de la página →
+  elegir formularios (o "Todos", que incluye los futuros).
+- **Dedupe**: el id se guarda como `l:<id>` — mismo formato que las planillas,
+  así ambos canales pueden convivir sin duplicar.
+- **Estados**: los leads de la API no traen `lead_status`; entran en "Nuevo" y
+  el estado se trabaja SOLO en el CRM (no hay sync de estados en este canal).
+- **Límite de Meta**: la API devuelve leads de los últimos ~90 días; el
+  histórico anterior queda en las planillas.

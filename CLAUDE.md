@@ -58,6 +58,7 @@ npm run dev                         # http://localhost:3000
 - `WHATSAPP_TEMPLATES_DRY_RUN=true` — saltar llamada real a Meta en dev
 - `LEADS_CRON_SECRET` — cron de ingesta de leads (cae a `AUTOMATION_CRON_SECRET` si no está)
 - `GOOGLE_SERVICE_ACCOUNT_JSON` — JSON completo del service account (lectura de Google Sheets)
+- `META_LEADS_ACCESS_TOKEN` — token de SYSTEM USER para fuentes meta_api (leads directo de la Graph API, ¡NUNCA en DB!)
 - `META_CAPI_ACCESS_TOKEN` — token de Meta Conversions API (¡NUNCA en DB!)
 
 ---
@@ -159,6 +160,7 @@ Ingesta leads de Meta Lead Ads (vía Google Sheets intermedias) hacia el CRM nat
 | `mapping.ts` | `detectColumnByContent()` + `suggestMapping()` (wizard) — detecta columnas por contenido, no por header |
 | `sheet-url.ts` | `parseSheetUrl()` — extrae spreadsheetId y gid de una URL |
 | `google-sheets.ts` | Auth JWT RS256 (sin googleapis), lectura REST Sheets v4, pestañas |
+| `meta-api.ts` | Fuente directa Meta Graph API: forms/leads por página + `mapApiLead()` (id con prefijo `l:` para dedupe entre canales; sin estados — el CRM manda) |
 | `ingest.ts` | Orquestación claim-first + sync de estados planilla→CRM |
 | `repository.ts` | Adaptador Supabase del puerto `LeadRepository` |
 | `capi.ts` | Meta Conversions API: SHA-256 allowlist, reconciliación idempotente |
@@ -252,6 +254,7 @@ automática por deal.
 028 — Webhook endpoints
 029 — Módulo Leads Meta (lead_sources, leads, lead_capi_events, lead_intake_errors, lead_capi_config, lead_sync_runs)
 030 — Wizard de fuentes (sheet_status/synced_stage_id en leads, índice único de fuentes activas, contador stage_synced)
+031 — Fuente directa Meta Graph API (kind meta_api, meta_page_id, meta_form_ids)
 ```
 
 ---
