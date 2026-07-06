@@ -135,7 +135,7 @@ anti-duplicados (con repo fake en memoria).
 | `src/app/api/leads/import-historico/route.ts` | Import histórico. |
 | `src/app/(dashboard)/leads/*` | Bandeja + fuentes (UI). |
 
-## 8. Fuente directa Meta API (sin Google)
+## 10. Fuente directa Meta API (sin Google)
 
 Desde la migración 031 existe el kind `meta_api`: el cron pide los leads
 directamente a la Graph API (polling cada ciclo), sin planilla intermedia.
