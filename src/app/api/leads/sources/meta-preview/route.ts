@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import {
   fetchPageForms,
+  fetchPageName,
   getMetaLeadsTokenConfigured,
 } from "@/lib/leads/meta-api";
 
@@ -41,8 +42,10 @@ export async function POST(request: Request) {
     }
 
     let forms;
+    let pageName: string | null = null;
     try {
       forms = await fetchPageForms(pageId);
+      pageName = await fetchPageName(pageId);
     } catch (err) {
       console.error("[leads/meta-preview] error:", err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -62,7 +65,7 @@ export async function POST(request: Request) {
       (s) => String(s.meta_page_id) === pageId,
     );
 
-    return NextResponse.json({ pageId, hasSource, forms });
+    return NextResponse.json({ pageId, pageName, hasSource, forms });
   } catch (err) {
     return toErrorResponse(err);
   }

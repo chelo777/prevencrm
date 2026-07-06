@@ -85,6 +85,16 @@ export async function getPageAccessToken(pageId: string): Promise<string> {
   return json.access_token;
 }
 
+/** Nombre visible de la página (para el wizard). */
+export async function fetchPageName(pageId: string): Promise<string | null> {
+  const pageToken = await getPageAccessToken(pageId);
+  const json = await graphGet<{ name?: string }>(pageId, {
+    fields: "name",
+    access_token: pageToken,
+  });
+  return json.name ?? null;
+}
+
 /** Lista los formularios de la página (con conteo de leads). */
 export async function fetchPageForms(pageId: string): Promise<MetaForm[]> {
   const pageToken = await getPageAccessToken(pageId);
