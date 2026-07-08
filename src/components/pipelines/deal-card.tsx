@@ -1,9 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import type { Deal, PipelineStage } from "@/types";
 import { Calendar, Check, MessageCircle, X } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { toWhatsAppNumber } from "@/lib/leads/phone";
+import { QuickSendSheet } from "@/components/quick-messages/quick-send-sheet";
 
 interface DealCardProps {
   deal: Deal;
@@ -27,6 +29,7 @@ function initials(name?: string, fallback?: string) {
 }
 
 export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
+  const [waOpen, setWaOpen] = useState(false);
   const contactName = deal.contact?.name?.trim() || null;
   const phone = deal.contact?.phone ?? null;
   const wa = toWhatsAppNumber(phone ? phone.replace(/\D/g, "") : "");
@@ -40,18 +43,8 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
   // Sin monto (los deals de leads valen 0) la fila entera desaparece.
   const hasValue = Number(deal.value) > 0;
 
-  function openWhatsApp() {
-    if (!wa) return;
-    const first = contactName ? contactName.split(" ")[0] : "";
-    const greeting = `Hola${first ? " " + first : ""}!`;
-    window.open(
-      `https://wa.me/${wa}?text=${encodeURIComponent(greeting)}`,
-      "_blank",
-      "noopener,noreferrer",
-    );
-  }
-
   return (
+    <>
     <button
       type="button"
       onClick={(e) => {
@@ -109,7 +102,7 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
                   title="Abrir WhatsApp"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openWhatsApp();
+                    setWaOpen(true);
                   }}
                   className="inline-flex shrink-0 items-center gap-1 text-emerald-500 hover:underline"
                 >
@@ -149,5 +142,14 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
         </div>
       )}
     </button>
+    {wa && !isOverlay && (
+      <QuickSendSheet
+        open={waOpen}
+        onOpenChange={setWaOpen}
+        waNumber={wa}
+        vars={{ nombre: contactName }}
+      />
+    )}
+    </>
   );
 }

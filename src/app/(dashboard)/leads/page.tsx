@@ -288,6 +288,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                         leadId={lead.id}
                         phone={lead.contact?.phone ?? null}
                         name={lead.contact?.name ?? null}
+                        campaign={lead.campaign_name ?? lead.form_name}
                         disabled={!lead.phone_valid}
                       />
                     </td>
