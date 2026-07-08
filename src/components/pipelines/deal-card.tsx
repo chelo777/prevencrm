@@ -1,8 +1,9 @@
 "use client";
 
 import type { Deal, PipelineStage } from "@/types";
-import { Calendar, Check, X } from "lucide-react";
+import { Calendar, Check, MessageCircle, X } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
+import { toWhatsAppNumber } from "@/lib/leads/phone";
 
 interface DealCardProps {
   deal: Deal;
@@ -26,8 +27,29 @@ function initials(name?: string, fallback?: string) {
 }
 
 export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
-  const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
+  const contactName = deal.contact?.name?.trim() || null;
+  const phone = deal.contact?.phone ?? null;
+  const wa = toWhatsAppNumber(phone ? phone.replace(/\D/g, "") : "");
+  // El módulo de leads titula el deal con el nombre del contacto — en
+  // ese caso no repetimos el nombre en la línea de contacto.
+  const showName = Boolean(
+    contactName &&
+      contactName.toLowerCase() !== deal.title.trim().toLowerCase(),
+  );
   const assigneeLabel = deal.assignee?.full_name || null;
+  // Sin monto (los deals de leads valen 0) la fila entera desaparece.
+  const hasValue = Number(deal.value) > 0;
+
+  function openWhatsApp() {
+    if (!wa) return;
+    const first = contactName ? contactName.split(" ")[0] : "";
+    const greeting = `Hola${first ? " " + first : ""}!`;
+    window.open(
+      `https://wa.me/${wa}?text=${encodeURIComponent(greeting)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }
 
   return (
     <button
@@ -39,7 +61,7 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
         e.stopPropagation();
         onEdit(deal);
       }}
-      className={`group relative w-full cursor-pointer rounded-xl border border-border/50 bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
+      className={`group relative w-full cursor-pointer rounded-xl border border-border/50 bg-muted/70 pl-4 pr-3 py-2.5 text-left shadow-sm transition-all ${
         isOverlay
           ? "shadow-xl"
           : "hover:-translate-y-0.5 hover:border-border hover:bg-muted hover:shadow-lg"
@@ -70,34 +92,60 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
         )}
       </div>
 
-      {/* Contact row */}
-      <div className="mt-2 flex items-center gap-2">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-foreground">
-          {initials(deal.contact?.name, deal.contact?.phone)}
-        </span>
-        <span className="truncate text-xs text-muted-foreground">{contactLabel}</span>
-      </div>
-
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-sm font-bold text-primary">
-          {formatCurrency(deal.value, deal.currency)}
-        </span>
-        {deal.expected_close_date && (
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Calendar className="h-3 w-3" />
-            {formatDate(deal.expected_close_date)}
+      {/* Línea de contacto: nombre solo si difiere del título; teléfono
+          como click-to-chat de WhatsApp; asignado a la derecha. */}
+      {(showName || phone || assigneeLabel) && (
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <span className="flex min-w-0 items-center gap-1.5 text-xs">
+            {showName && (
+              <span className="truncate text-muted-foreground">
+                {contactName}
+              </span>
+            )}
+            {phone &&
+              (wa ? (
+                <span
+                  role="link"
+                  title="Abrir WhatsApp"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openWhatsApp();
+                  }}
+                  className="inline-flex shrink-0 items-center gap-1 text-emerald-500 hover:underline"
+                >
+                  <MessageCircle className="h-3 w-3" />
+                  {phone}
+                </span>
+              ) : (
+                <span className="shrink-0 text-muted-foreground">{phone}</span>
+              ))}
           </span>
-        )}
-      </div>
+          {assigneeLabel && (
+            <span
+              title={assigneeLabel}
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
+            >
+              {initials(assigneeLabel)}
+            </span>
+          )}
+        </div>
+      )}
 
-      {assigneeLabel && (
-        <div className="mt-2 flex items-center justify-end">
-          <span
-            title={assigneeLabel}
-            className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
-          >
-            {initials(assigneeLabel)}
-          </span>
+      {(hasValue || deal.expected_close_date) && (
+        <div className="mt-1.5 flex items-center justify-between">
+          {hasValue ? (
+            <span className="text-sm font-bold text-primary">
+              {formatCurrency(deal.value, deal.currency)}
+            </span>
+          ) : (
+            <span />
+          )}
+          {deal.expected_close_date && (
+            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Calendar className="h-3 w-3" />
+              {formatDate(deal.expected_close_date)}
+            </span>
+          )}
         </div>
       )}
     </button>
