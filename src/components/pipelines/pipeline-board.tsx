@@ -220,7 +220,7 @@ function StageColumn({
       >
         {deals.length === 0 ? (
           <div className="flex flex-1 items-center justify-center rounded-lg border-2 border-dashed border-border py-10 text-xs text-muted-foreground">
-            Drop a deal here
+            Soltá un deal acá
           </div>
         ) : (
           deals.map((deal) => (
@@ -241,7 +241,7 @@ function StageColumn({
         className="mt-3 w-full justify-start border border-dashed border-border bg-transparent text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground"
       >
         <Plus className="mr-1 h-3 w-3" />
-        Add Deal
+        Nuevo deal
       </Button>
     </div>
   );
