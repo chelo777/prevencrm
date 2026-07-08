@@ -1,5 +1,4 @@
 import {
-  Coins,
   FileText,
   KeyRound,
   LayoutGrid,
@@ -28,7 +27,6 @@ export const SETTINGS_SECTIONS = [
   'whatsapp',
   'templates',
   'fields',
-  'deals',
   'members',
   'api',
 ] as const;
@@ -53,7 +51,6 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
-  deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
   members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
 };
@@ -76,6 +73,8 @@ function isSection(value: string | null): value is SettingsSection {
  */
 export function resolveSection(raw: string | null): SettingsSection {
   if (raw === 'tags' || raw === 'custom-fields') return 'fields';
+  // La sección "Deals & currency" se retiró (el CRM no maneja montos);
+  // los links viejos caen en el Overview.
   if (isSection(raw)) return raw;
   return DEFAULT_SECTION;
 }

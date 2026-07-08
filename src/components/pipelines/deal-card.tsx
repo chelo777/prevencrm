@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { Deal, PipelineStage } from "@/types";
 import { Calendar, Check, MessageCircle, X } from "lucide-react";
-import { formatCurrency } from "@/lib/currency";
 import { toWhatsAppNumber } from "@/lib/leads/phone";
 import { QuickSendSheet } from "@/components/quick-messages/quick-send-sheet";
 
@@ -40,8 +39,6 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
       contactName.toLowerCase() !== deal.title.trim().toLowerCase(),
   );
   const assigneeLabel = deal.assignee?.full_name || null;
-  // Sin monto (los deals de leads valen 0) la fila entera desaparece.
-  const hasValue = Number(deal.value) > 0;
 
   return (
     <>
@@ -124,21 +121,12 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
         </div>
       )}
 
-      {(hasValue || deal.expected_close_date) && (
-        <div className="mt-1.5 flex items-center justify-between">
-          {hasValue ? (
-            <span className="text-sm font-bold text-primary">
-              {formatCurrency(deal.value, deal.currency)}
-            </span>
-          ) : (
-            <span />
-          )}
-          {deal.expected_close_date && (
-            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <Calendar className="h-3 w-3" />
-              {formatDate(deal.expected_close_date)}
-            </span>
-          )}
+      {deal.expected_close_date && (
+        <div className="mt-1.5 flex items-center justify-end">
+          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Calendar className="h-3 w-3" />
+            {formatDate(deal.expected_close_date)}
+          </span>
         </div>
       )}
     </button>

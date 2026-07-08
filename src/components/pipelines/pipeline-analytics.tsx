@@ -3,13 +3,13 @@
 import { useMemo } from "react";
 import type { Deal, PipelineStage } from "@/types";
 import {
-  DollarSign,
-  TrendingUp,
-  Target,
   BarChart3,
+  Calendar,
+  Info,
+  Target,
+  TrendingUp,
   Trophy,
   XCircle,
-  Info,
 } from "lucide-react";
 import {
   Tooltip,
@@ -17,79 +17,48 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useAuth } from "@/hooks/use-auth";
-import { formatCurrency } from "@/lib/currency";
+
+// Métricas del pipeline SIN dinero: este CRM trabaja leads de planes
+// de salud, no montos — todo se mide en cantidad de deals y ritmo de
+// entrada (hoy / este mes) más los cierres por estado.
 
 interface PipelineAnalyticsProps {
   stages: PipelineStage[];
   deals: Deal[];
 }
 
-/**
- * Weighted pipeline value: value × per-stage probability.
- * First stage ≈ 10%, stages interpolate up to 90% before the final stage,
- * final stage (Won) = 100%. Lost deals excluded.
- */
-function computeStageProbability(
-  stage: PipelineStage,
-  sortedStages: PipelineStage[],
-): number {
-  const n = sortedStages.length;
-  if (n <= 1) return 1;
-  const index = sortedStages.findIndex((s) => s.id === stage.id);
-  if (index < 0) return 0;
-  if (index === n - 1) return 1;
-  const slots = n - 1;
-  if (slots <= 1) return 0.1;
-  const t = index / (slots - 1);
-  return 0.1 + t * (0.9 - 0.1);
-}
-
-export function PipelineAnalytics({ stages, deals }: PipelineAnalyticsProps) {
-  const { defaultCurrency } = useAuth();
-  const sortedStages = useMemo(
-    () => [...stages].sort((a, b) => a.position - b.position),
-    [stages],
-  );
-
+export function PipelineAnalytics({ deals }: PipelineAnalyticsProps) {
   const stats = useMemo(() => {
     const active = deals.filter((d) => d.status !== "lost");
     const openDeals = active.filter((d) => d.status !== "won");
 
-    const totalCount = active.length;
-    const totalValue = active.reduce((sum, d) => sum + Number(d.value || 0), 0);
-    const avgValue = totalCount > 0 ? totalValue / totalCount : 0;
-
-    const stageById = new Map(sortedStages.map((s) => [s.id, s]));
-    const weightedValue = openDeals.reduce((sum, d) => {
-      const stage = stageById.get(d.stage_id);
-      if (!stage) return sum;
-      const prob = computeStageProbability(stage, sortedStages);
-      return sum + Number(d.value || 0) * prob;
-    }, 0);
-
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const thisMonth = (d: Deal) => {
+    const dayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    );
+    const createdSince = (d: Deal, since: Date) =>
+      d.created_at ? new Date(d.created_at) >= since : false;
+    const updatedThisMonth = (d: Deal) => {
       const ts = d.updated_at ?? d.created_at;
       return ts ? new Date(ts) >= monthStart : false;
     };
-    const wonThisMonth = deals.filter(
-      (d) => d.status === "won" && thisMonth(d),
-    ).length;
-    const lostThisMonth = deals.filter(
-      (d) => d.status === "lost" && thisMonth(d),
-    ).length;
 
     return {
-      totalCount,
-      totalValue,
-      avgValue,
-      weightedValue,
-      wonThisMonth,
-      lostThisMonth,
+      totalCount: active.length,
+      openCount: openDeals.length,
+      newToday: deals.filter((d) => createdSince(d, dayStart)).length,
+      newThisMonth: deals.filter((d) => createdSince(d, monthStart)).length,
+      wonThisMonth: deals.filter(
+        (d) => d.status === "won" && updatedThisMonth(d),
+      ).length,
+      lostThisMonth: deals.filter(
+        (d) => d.status === "lost" && updatedThisMonth(d),
+      ).length,
     };
-  }, [deals, sortedStages]);
+  }, [deals]);
 
   return (
     <TooltipProvider>
@@ -101,22 +70,22 @@ export function PipelineAnalytics({ stages, deals }: PipelineAnalyticsProps) {
           tooltip="Count of every deal in this pipeline that isn't marked as Lost. Won deals are still included."
         />
         <Metric
-          icon={<DollarSign className="h-4 w-4 text-primary" />}
-          label="Pipeline Value"
-          value={formatCurrency(stats.totalValue, defaultCurrency)}
-          tooltip="Sum of the dollar values of all deals in this pipeline, excluding deals marked as Lost."
-        />
-        <Metric
           icon={<Target className="h-4 w-4 text-blue-400" />}
-          label="Avg Deal Size"
-          value={formatCurrency(stats.avgValue, defaultCurrency)}
-          tooltip="Pipeline Value divided by Total Deals — the average value of a single non-lost deal."
+          label="Open Deals"
+          value={String(stats.openCount)}
+          tooltip="Deals still in play — not marked as Won or Lost."
         />
         <Metric
-          icon={<TrendingUp className="h-4 w-4 text-purple-400" />}
-          label="Weighted Value"
-          value={formatCurrency(stats.weightedValue, defaultCurrency)}
-          tooltip="Expected revenue: each open deal's value × its stage probability. First stage ≈ 10%, stages progress up to 90%, Won = 100%. Lost deals are excluded."
+          icon={<TrendingUp className="h-4 w-4 text-primary" />}
+          label="New Today"
+          value={String(stats.newToday)}
+          tooltip="Deals created since midnight — the day's incoming flow."
+        />
+        <Metric
+          icon={<Calendar className="h-4 w-4 text-purple-400" />}
+          label="New This Month"
+          value={String(stats.newThisMonth)}
+          tooltip="Deals created since the first day of the current month."
         />
         <Metric
           icon={<Trophy className="h-4 w-4 text-primary" />}
