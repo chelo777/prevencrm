@@ -19,6 +19,7 @@ import {
 } from "@/lib/leads/meta-api";
 import { ingestLead } from "@/lib/leads/ingest";
 import { reconcileAllCapi } from "@/lib/leads/capi";
+import { notifyNewLeads } from "@/lib/push/lead-alerts";
 
 // Node runtime: usamos node:crypto (JWT de Google + SHA-256 de CAPI).
 export const runtime = "nodejs";
@@ -45,6 +46,11 @@ export async function GET(request: Request) {
   }
 
   const admin = supabaseAdmin();
+
+  // Marca de inicio de la corrida + cuentas con leads nuevos: al final
+  // se manda UN push agrupado por agente (ver notifyNewLeads).
+  const runStartedAt = new Date().toISOString();
+  const newLeadAccounts = new Set<string>();
 
   let sources;
   try {
@@ -117,6 +123,7 @@ export async function GET(request: Request) {
 
     await recordSyncRun(admin, source.accountId, source.id, startedAt, totals);
     perSource.push({ source: source.name, ...totals });
+    if (totals.claimed > 0) newLeadAccounts.add(source.accountId);
   }
 
   // ------------------------------------------------------------
@@ -204,6 +211,7 @@ export async function GET(request: Request) {
 
     await recordSyncRun(admin, source.accountId, source.id, startedAt, totals);
     perSource.push({ source: source.name, ...totals });
+    if (totals.claimed > 0) newLeadAccounts.add(source.accountId);
   }
 
   // Feedback de conversión a Meta (idempotente).
@@ -212,6 +220,15 @@ export async function GET(request: Request) {
     capi = await reconcileAllCapi(admin);
   } catch (capiErr) {
     console.error("[leads/sync] error en reconciliación CAPI:", capiErr);
+  }
+
+  // Push "nuevo lead" al teléfono — best effort, nunca voltea la corrida.
+  try {
+    for (const accountId of newLeadAccounts) {
+      await notifyNewLeads(admin, accountId, runStartedAt);
+    }
+  } catch (pushErr) {
+    console.error("[leads/sync] error enviando push:", pushErr);
   }
 
   return NextResponse.json({ sources: perSource, capi });

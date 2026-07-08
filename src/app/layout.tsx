@@ -36,6 +36,13 @@ export const metadata: Metadata = {
     address: false,
     telephone: false,
   },
+  // PWA: instalable en el teléfono (manifest) + modo standalone en iOS.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "PrevenCRM",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {

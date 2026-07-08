@@ -8,6 +8,7 @@ import type { Notification } from "@/types";
 import { Bell, CheckCheck, Loader2, UserPlus } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
+import { PushToggle } from "@/components/push/push-toggle";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -170,19 +171,22 @@ export default function NotificationsPage() {
             Conversations other teammates assign to you show up here.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={unreadIds.length === 0 || markingAll}
-          onClick={markAllRead}
-        >
-          {markingAll ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <CheckCheck className="h-4 w-4" />
-          )}
-          Mark all as read
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <PushToggle />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={unreadIds.length === 0 || markingAll}
+            onClick={markAllRead}
+          >
+            {markingAll ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCheck className="h-4 w-4" />
+            )}
+            Mark all as read
+          </Button>
+        </div>
       </div>
 
       {notifications.length === 0 ? (

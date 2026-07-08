@@ -60,6 +60,8 @@ npm run dev                         # http://localhost:3000
 - `GOOGLE_SERVICE_ACCOUNT_JSON` — JSON completo del service account (lectura de Google Sheets)
 - `META_LEADS_ACCESS_TOKEN` — token de SYSTEM USER para fuentes meta_api (leads directo de la Graph API, ¡NUNCA en DB!)
 - `META_CAPI_ACCESS_TOKEN` — token de Meta Conversions API (¡NUNCA en DB!)
+- `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` — par Web Push para notificaciones PWA (`npx web-push generate-vapid-keys`); sin ellas el push es no-op
+- `VAPID_SUBJECT` — contacto del emisor push (`mailto:...`), opcional
 
 ---
 
