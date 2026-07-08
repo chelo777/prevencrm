@@ -3,13 +3,19 @@ import { AlertTriangle, Settings2 } from "lucide-react";
 import { getCurrentAccount } from "@/lib/auth/account";
 import { WhatsAppButton } from "./whatsapp-button";
 import { LeadFilters } from "./filters";
+import { StageSelect, type StageOption } from "./stage-select";
 
 export const dynamic = "force-dynamic";
 
 // Bandeja de leads de Meta. Server component: lee el estado actual y
-// lo renderiza; los trozos cliente son el botón de WhatsApp
-// (click-to-chat + traza) y los filtros por etapa/etiqueta, que viven
-// en la URL y se aplican en la consulta (paginado de a 50).
+// lo renderiza; los trozos cliente son el botón de WhatsApp, el select
+// de etapa (update optimista como el Kanban) y los filtros por
+// etapa/etiqueta en la URL (paginado de a 50).
+//
+// Responsive: en el teléfono la tabla se reduce a lo accionable —
+// contacto (con etiquetas debajo), etapa editable y WhatsApp solo
+// ícono. Campaña, fecha y la columna de etiquetas aparecen recién en
+// pantallas anchas; nunca hay scroll horizontal.
 
 const PER_PAGE = 50;
 
@@ -34,8 +40,7 @@ interface LeadRow {
   } | null;
   deal: {
     id: string;
-    assigned_agent_id: string | null;
-    stage: { name: string; color: string } | null;
+    stage_id: string;
   } | null;
 }
 
@@ -50,6 +55,22 @@ function fmtDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function TagList({ tags }: { tags: TagChip[] }) {
+  return (
+    <div className="flex max-w-48 flex-wrap gap-1">
+      {tags.map((tag) => (
+        <span
+          key={tag.id}
+          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+          style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+        >
+          {tag.name}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 interface PageProps {
@@ -72,19 +93,27 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   );
   const from = (pageNum - 1) * PER_PAGE;
 
-  // Catálogos para los filtros (etapas de los pipelines de la cuenta
-  // y etiquetas visibles según RLS).
+  // Catálogos: etapas de los pipelines de la cuenta (alimentan el
+  // filtro Y el select inline de cada fila) y etiquetas visibles.
   const [{ data: pipelines }, { data: tagRows }] = await Promise.all([
     supabase
       .from("pipelines")
-      .select("id, stages:pipeline_stages(id, name, position)")
+      .select("id, stages:pipeline_stages(id, name, color, position)")
       .eq("account_id", accountId),
     supabase.from("tags").select("id, name").order("name"),
   ]);
-  const stages = (pipelines ?? [])
-    .flatMap((p) => (p.stages ?? []) as { id: string; name: string; position: number }[])
+  const stages: StageOption[] = (pipelines ?? [])
+    .flatMap(
+      (p) =>
+        (p.stages ?? []) as {
+          id: string;
+          name: string;
+          color: string;
+          position: number;
+        }[],
+    )
     .sort((a, b) => a.position - b.position)
-    .map((s) => ({ id: s.id, name: s.name }));
+    .map((s) => ({ id: s.id, name: s.name, color: s.color }));
   const tagOptions = (tagRows ?? []).map((t) => ({ id: t.id, name: t.name }));
 
   // El embed de contact_tags(tags(*)) trae SIEMPRE el set completo de
@@ -94,8 +123,8 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     ? "contact:contacts!inner(id, name, phone, contact_tags(tags(id, name, color)), tag_filter:contact_tags!inner(tag_id))"
     : "contact:contacts(id, name, phone, contact_tags(tags(id, name, color)))";
   const dealEmbed = stageFilter
-    ? "deal:deals!inner(id, assigned_agent_id, stage_id, stage:pipeline_stages(name, color))"
-    : "deal:deals(id, assigned_agent_id, stage:pipeline_stages(name, color))";
+    ? "deal:deals!inner(id, stage_id)"
+    : "deal:deals(id, stage_id)";
 
   let query = supabase
     .from("leads")
@@ -172,12 +201,20 @@ export default async function LeadsPage({ searchParams }: PageProps) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
-              <th className="px-4 py-3 font-medium">Contacto</th>
-              <th className="px-4 py-3 font-medium">Etapa</th>
-              <th className="px-4 py-3 font-medium">Etiquetas</th>
-              <th className="px-4 py-3 font-medium">Campaña</th>
-              <th className="px-4 py-3 font-medium">Ingresó</th>
-              <th className="px-4 py-3 font-medium">Acción</th>
+              <th className="px-3 py-3 font-medium sm:px-4">Contacto</th>
+              <th className="px-3 py-3 font-medium sm:px-4">Etapa</th>
+              <th className="hidden px-4 py-3 font-medium md:table-cell">
+                Etiquetas
+              </th>
+              <th className="hidden px-4 py-3 font-medium lg:table-cell">
+                Campaña
+              </th>
+              <th className="hidden px-4 py-3 font-medium md:table-cell">
+                Ingresó
+              </th>
+              <th className="px-3 py-3 font-medium sm:px-4">
+                <span className="sr-only sm:not-sr-only">Acción</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -204,7 +241,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                   .filter((t): t is TagChip => Boolean(t));
                 return (
                   <tr key={lead.id} className="border-b border-border/60 last:border-0">
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 sm:px-4">
                       <div className="font-medium text-foreground">
                         {lead.contact?.name || "Sin nombre"}
                       </div>
@@ -216,49 +253,37 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                           </span>
                         )}
                       </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      {lead.deal?.stage ? (
-                        <span
-                          className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs"
-                          style={{
-                            backgroundColor: `${lead.deal.stage.color}22`,
-                            color: lead.deal.stage.color,
-                          }}
-                        >
-                          {lead.deal.stage.name}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {leadTags.length === 0 ? (
-                        <span className="text-muted-foreground">—</span>
-                      ) : (
-                        <div className="flex max-w-48 flex-wrap gap-1">
-                          {leadTags.map((tag) => (
-                            <span
-                              key={tag.id}
-                              className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
-                              style={{
-                                backgroundColor: `${tag.color}22`,
-                                color: tag.color,
-                              }}
-                            >
-                              {tag.name}
-                            </span>
-                          ))}
+                      {leadTags.length > 0 && (
+                        <div className="mt-1 md:hidden">
+                          <TagList tags={leadTags} />
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">
+                    <td className="px-3 py-3 sm:px-4">
+                      {lead.deal ? (
+                        <StageSelect
+                          dealId={lead.deal.id}
+                          stages={stages}
+                          initialStageId={lead.deal.stage_id}
+                        />
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="hidden px-4 py-3 md:table-cell">
+                      {leadTags.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <TagList tags={leadTags} />
+                      )}
+                    </td>
+                    <td className="hidden px-4 py-3 text-muted-foreground lg:table-cell">
                       {lead.campaign_name || lead.form_name || "—"}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">
+                    <td className="hidden px-4 py-3 text-muted-foreground md:table-cell">
                       {fmtDate(lead.created_at)}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 text-right sm:px-4 sm:text-left">
                       <WhatsAppButton
                         leadId={lead.id}
                         phone={lead.contact?.phone ?? null}

@@ -44,10 +44,13 @@ export function WhatsAppButton({ leadId, phone, name, disabled }: Props) {
       onClick={onClick}
       disabled={!usable}
       title={usable ? "Abrir WhatsApp" : "Teléfono no válido"}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+      aria-label={done ? "Contactado por WhatsApp" : "Abrir WhatsApp"}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40 sm:px-2.5 sm:py-1.5"
     >
-      <MessageCircle className="h-3.5 w-3.5" />
-      {done ? "Contactado" : "WhatsApp"}
+      <MessageCircle className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+      <span className="hidden sm:inline">
+        {done ? "Contactado" : "WhatsApp"}
+      </span>
     </button>
   );
 }
