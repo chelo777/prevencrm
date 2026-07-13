@@ -84,10 +84,10 @@ export async function notifyNewLeads(
       if (!fallback) {
         const { data: adminRows } = await admin
           .from("profiles")
-          .select("id")
+          .select("user_id")
           .eq("account_id", accountId)
           .in("account_role", ["owner", "admin"]);
-        fallback = (adminRows ?? []).map((r) => r.id as string);
+        fallback = (adminRows ?? []).map((r) => r.user_id as string);
       }
       recipients = fallback;
     }
