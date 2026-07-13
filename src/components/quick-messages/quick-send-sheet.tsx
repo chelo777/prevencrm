@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, Pencil } from "lucide-react";
+import { Loader2, MessageCircle, Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
   Sheet,
@@ -60,14 +60,15 @@ export function QuickSendSheet({
     };
   }, [open]);
 
-  function send(text: string) {
+  function send(text?: string) {
     // api.whatsapp.com directo, NO wa.me: el redirect de wa.me rompe
-    // los emojis de 4 bytes (👋 → �) — verificado en vivo.
-    window.open(
-      `https://api.whatsapp.com/send?phone=${waNumber}&text=${encodeURIComponent(text)}`,
-      "_blank",
-      "noopener,noreferrer",
-    );
+    // los emojis de 4 bytes (👋 → �) — verificado en vivo. Sin texto
+    // (chat vacío), omitimos el parámetro por completo en vez de
+    // mandar text= vacío — así WhatsApp no deja ni un espacio picado.
+    const url = text
+      ? `https://api.whatsapp.com/send?phone=${waNumber}&text=${encodeURIComponent(text)}`
+      : `https://api.whatsapp.com/send?phone=${waNumber}`;
+    window.open(url, "_blank", "noopener,noreferrer");
     onSent?.();
     onOpenChange(false);
   }
@@ -122,6 +123,21 @@ export function QuickSendSheet({
                 </div>
                 <div className="mt-0.5 text-xs text-muted-foreground">
                   {fallback}
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => send()}
+                className={`${ITEM_CLASS} flex items-center gap-2`}
+              >
+                <MessageCircle className="h-4 w-4 shrink-0 text-emerald-500" />
+                <div>
+                  <div className="text-sm font-medium text-foreground">
+                    Chat vacío
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    Abrir WhatsApp sin ningún texto escrito
+                  </div>
                 </div>
               </button>
             </>
