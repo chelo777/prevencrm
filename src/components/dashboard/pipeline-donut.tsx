@@ -19,7 +19,7 @@ export function PipelineDonut({ data, loading }: PipelineDonutProps) {
       <header className="border-b border-border px-5 py-4">
         <h2 className="text-sm font-semibold text-foreground">Pipeline</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Open deals by stage
+          Deals abiertos por etapa
         </p>
       </header>
 
@@ -29,8 +29,8 @@ export function PipelineDonut({ data, loading }: PipelineDonutProps) {
         ) : data.stages.length === 0 ? (
           <EmptyState
             icon={GitBranch}
-            title="No open deals yet"
-            hint="Create deals in Pipelines to see stage breakdowns here."
+            title="Todavía no hay deals abiertos"
+            hint="Creá deals en Pipelines para ver acá el desglose por etapa."
           />
         ) : (
           <>
@@ -94,7 +94,7 @@ function Donut({ data }: { data: PipelineDonutData }) {
 
   return (
     <div className="flex items-center justify-center">
-      <svg viewBox={`0 0 ${size} ${size}`} className="h-48 w-48" role="img" aria-label="Open deals by stage">
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-48 w-48" role="img" aria-label="Deals abiertos por etapa">
         {/* background ring */}
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--muted)" strokeWidth={ringWidth} />
         {segments.map((seg) => (

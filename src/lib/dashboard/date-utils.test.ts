@@ -105,19 +105,22 @@ describe("lastNDayKeys", () => {
 });
 
 describe("mondayIndex", () => {
+  // Constructor local (año, mes, día) a propósito: las fechas ISO
+  // date-only se parsean como UTC y en husos UTC-3 caían en el día
+  // anterior, haciendo flaky estos tests fuera de CI.
   it("maps Monday → 0 and Sunday → 6", () => {
-    expect(mondayIndex(new Date("2026-05-18"))).toBe(0); // Mon
-    expect(mondayIndex(new Date("2026-05-19"))).toBe(1); // Tue
-    expect(mondayIndex(new Date("2026-05-23"))).toBe(5); // Sat
-    expect(mondayIndex(new Date("2026-05-24"))).toBe(6); // Sun
+    expect(mondayIndex(new Date(2026, 4, 18))).toBe(0); // lunes
+    expect(mondayIndex(new Date(2026, 4, 19))).toBe(1); // martes
+    expect(mondayIndex(new Date(2026, 4, 23))).toBe(5); // sábado
+    expect(mondayIndex(new Date(2026, 4, 24))).toBe(6); // domingo
   });
 
   it("aligns with DOW_SHORT_MON_FIRST labels", () => {
-    expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date("2026-05-18"))]).toBe(
-      "Mon",
+    expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date(2026, 4, 18))]).toBe(
+      "Lun",
     );
-    expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date("2026-05-24"))]).toBe(
-      "Sun",
+    expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date(2026, 4, 24))]).toBe(
+      "Dom",
     );
   });
 });

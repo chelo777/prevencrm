@@ -65,39 +65,39 @@ export function PipelineAnalytics({ deals }: PipelineAnalyticsProps) {
       <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-card/60 p-4 sm:grid-cols-3 xl:grid-cols-6">
         <Metric
           icon={<BarChart3 className="h-4 w-4 text-muted-foreground" />}
-          label="Total Deals"
+          label="Deals totales"
           value={String(stats.totalCount)}
-          tooltip="Count of every deal in this pipeline that isn't marked as Lost. Won deals are still included."
+          tooltip="Todos los deals de este pipeline que no están marcados como perdidos. Los ganados cuentan."
         />
         <Metric
           icon={<Target className="h-4 w-4 text-blue-400" />}
-          label="Open Deals"
+          label="Deals abiertos"
           value={String(stats.openCount)}
-          tooltip="Deals still in play — not marked as Won or Lost."
+          tooltip="Deals todavía en juego — sin marcar como ganados ni perdidos."
         />
         <Metric
           icon={<TrendingUp className="h-4 w-4 text-primary" />}
-          label="New Today"
+          label="Nuevos hoy"
           value={String(stats.newToday)}
-          tooltip="Deals created since midnight — the day's incoming flow."
+          tooltip="Deals creados desde la medianoche — el flujo de entrada del día."
         />
         <Metric
           icon={<Calendar className="h-4 w-4 text-purple-400" />}
-          label="New This Month"
+          label="Nuevos este mes"
           value={String(stats.newThisMonth)}
-          tooltip="Deals created since the first day of the current month."
+          tooltip="Deals creados desde el primer día del mes."
         />
         <Metric
           icon={<Trophy className="h-4 w-4 text-primary" />}
-          label="Won This Month"
+          label="Ganados este mes"
           value={String(stats.wonThisMonth)}
-          tooltip="Deals marked as Won since the first day of the current month."
+          tooltip="Deals marcados como ganados desde el primer día del mes."
         />
         <Metric
           icon={<XCircle className="h-4 w-4 text-red-400" />}
-          label="Lost This Month"
+          label="Perdidos este mes"
           value={String(stats.lostThisMonth)}
-          tooltip="Deals marked as Lost since the first day of the current month."
+          tooltip="Deals marcados como perdidos desde el primer día del mes."
         />
       </div>
     </TooltipProvider>
@@ -125,7 +125,7 @@ function Metric({
             render={
               <button
                 type="button"
-                aria-label={`How ${label} is calculated`}
+                aria-label={`Cómo se calcula ${label}`}
                 className="ml-auto text-muted-foreground hover:text-foreground focus:outline-none"
               />
             }
