@@ -44,32 +44,32 @@ describe("derivePresence", () => {
 
 describe("formatLastSeen", () => {
   it("describes recent activity coarsely", () => {
-    expect(formatLastSeen(ago(10_000), NOW)).toBe("just now");
-    expect(formatLastSeen(ago(60_000), NOW)).toBe("1 minute ago");
-    expect(formatLastSeen(ago(5 * 60_000), NOW)).toBe("5 minutes ago");
+    expect(formatLastSeen(ago(10_000), NOW)).toBe("justo ahora");
+    expect(formatLastSeen(ago(60_000), NOW)).toBe("hace 1 minuto");
+    expect(formatLastSeen(ago(5 * 60_000), NOW)).toBe("hace 5 minutos");
   });
 
   it("rolls up into hours and days", () => {
-    expect(formatLastSeen(ago(60 * 60_000), NOW)).toBe("1 hour ago");
-    expect(formatLastSeen(ago(2 * 60 * 60_000), NOW)).toBe("2 hours ago");
-    expect(formatLastSeen(ago(24 * 60 * 60_000), NOW)).toBe("1 day ago");
-    expect(formatLastSeen(ago(3 * 24 * 60 * 60_000), NOW)).toBe("3 days ago");
+    expect(formatLastSeen(ago(60 * 60_000), NOW)).toBe("hace 1 hora");
+    expect(formatLastSeen(ago(2 * 60 * 60_000), NOW)).toBe("hace 2 horas");
+    expect(formatLastSeen(ago(24 * 60 * 60_000), NOW)).toBe("hace 1 día");
+    expect(formatLastSeen(ago(3 * 24 * 60 * 60_000), NOW)).toBe("hace 3 días");
   });
 
   it("falls back gracefully on missing/invalid input", () => {
-    expect(formatLastSeen(null, NOW)).toBe("a while ago");
-    expect(formatLastSeen("nonsense", NOW)).toBe("a while ago");
+    expect(formatLastSeen(null, NOW)).toBe("hace un rato");
+    expect(formatLastSeen("nonsense", NOW)).toBe("hace un rato");
   });
 });
 
 describe("presenceLabel", () => {
   it("labels each state for the tooltip", () => {
     expect(presenceLabel("online", ago(1_000), NOW)).toBe(
-      "Online — active now",
+      "En línea — activo ahora",
     );
-    expect(presenceLabel("away", ago(1_000), NOW)).toBe("Away — idle");
+    expect(presenceLabel("away", ago(1_000), NOW)).toBe("Ausente — inactivo");
     expect(presenceLabel("offline", ago(2 * 60 * 60_000), NOW)).toBe(
-      "Offline — last seen 2 hours ago",
+      "Desconectado — última vez hace 2 horas",
     );
   });
 });
