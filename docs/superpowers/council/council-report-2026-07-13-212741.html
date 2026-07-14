@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Council — Router multi-asesor MVP</title>
+<style>
+  :root{
+    --bg:#0f1115; --surface:#171a21; --surface2:#1e222b; --border:#2a2f3a;
+    --ink:#e7e9ee; --muted:#9aa2b1; --faint:#6b7280;
+    --accent:#10b981; --warn:#f59e0b; --danger:#ef4444; --info:#60a5fa; --violet:#a78bfa;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;font-size:16px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 20px 80px}
+  header.top{margin-bottom:28px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  h1{font-size:clamp(1.5rem,4vw,2.1rem);line-height:1.2;margin:.3em 0 .1em;letter-spacing:-0.02em;text-wrap:balance}
+  .sub{color:var(--muted);font-size:15px}
+  .q{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:18px 20px;margin:22px 0;font-size:15px;color:var(--muted)}
+  .q b{color:var(--ink);font-weight:600}
+  .q .hard{display:block;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);color:var(--warn)}
+  h2{font-size:1.15rem;margin:34px 0 14px;letter-spacing:-0.01em;display:flex;align-items:center;gap:9px}
+  h2 .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .verdict{background:linear-gradient(180deg,#161e1b,#141821);border:1px solid #245244;
+    border-radius:16px;padding:6px 26px 22px;margin:18px 0 10px}
+  .block{margin:20px 0}
+  .block h3{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:700}
+  .block p{margin:.3em 0}
+  .agree li{margin:6px 0}
+  .rec{background:var(--surface2);border:1px solid var(--border);border-left:none;border-radius:var(--radius);padding:16px 20px;margin:12px 0}
+  .first{background:#1a2620;border:1px solid var(--accent);border-radius:var(--radius);
+    padding:16px 20px;margin:16px 0;font-size:15px}
+  .first b{color:var(--accent)}
+  ul{padding-left:20px;margin:.4em 0}
+  code{background:#0c0e12;border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.86em;color:#cbd5e1}
+  /* consensus grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .card .name{font-weight:700;font-size:.9rem;margin-bottom:2px}
+  .card .lens{font-size:.72rem;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
+  .card .verdict-tag{margin-top:9px;font-size:.78rem;font-weight:600;display:inline-block;padding:2px 9px;border-radius:20px}
+  .tag-strong{background:rgba(16,185,129,.14);color:#34d399}
+  .tag-blind{background:rgba(239,68,68,.14);color:#f87171}
+  .tag-mid{background:rgba(154,162,177,.14);color:var(--muted)}
+  .spectrum{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin:16px 0}
+  .spectrum .row{display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-bottom:1px dashed var(--border)}
+  .spectrum .row:last-child{border-bottom:none}
+  .spectrum .lbl{flex:0 0 128px;font-weight:600;font-size:.85rem}
+  .spectrum .txt{font-size:.9rem;color:var(--muted)}
+  details{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin:10px 0;overflow:hidden}
+  details summary{cursor:pointer;padding:14px 18px;font-weight:600;list-style:none;display:flex;align-items:center;gap:10px}
+  details summary::-webkit-details-marker{display:none}
+  details summary .chev{margin-left:auto;color:var(--faint);transition:transform .2s}
+  details[open] summary .chev{transform:rotate(90deg)}
+  details .body{padding:0 18px 16px;color:var(--muted);font-size:.93rem}
+  details .body p{margin:.6em 0}
+  .lens-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+  .miss{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 20px 14px;margin:12px 0}
+  .miss ol{padding-left:20px}
+  .miss li{margin:8px 0;font-size:.93rem;color:var(--muted)}
+  .miss li b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="kicker">LLM Council · Veredicto</div>
+    <h1>MVP del router multi-asesor: ¿pedir el teléfono en la página?</h1>
+    <div class="sub">5 asesores independientes + peer review a ciegas + síntesis · 2026-07-13</div>
+  </header>
+
+  <div class="q">
+    <b>La decisión evaluada:</b> una campaña/formulario único en Meta → la pantalla de gracias redirige a una URL fija → una página propia le PIDE EL TELÉFONO a la persona → el CRM busca el deal ya asignado por dedupe y muestra el WhatsApp de la asesora. Corre en paralelo al flujo viejo (planilla + campañas duplicadas). Objetivo: bajar el CPL 2-3x consolidando la subasta de Meta y poder sumar más compradoras.
+    <span class="hard">⚠ Restricción dura verificada: la pantalla de gracias de Meta redirige a una URL FIJA por formulario — no se puede inyectar el lead_id. Todos caen en la misma URL sin identificador.</span>
+  </div>
+
+  <!-- CONSENSO VISUAL -->
+  <h2><span class="dot" style="background:var(--violet)"></span>Consenso del panel</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="name">First Principles</div>
+      <div class="lens">Reencuadre</div>
+      <div class="verdict-tag tag-strong">★ Más fuerte · 5/5</div>
+    </div>
+    <div class="card">
+      <div class="name">Contrarian</div>
+      <div class="lens">Riesgo</div>
+      <div class="verdict-tag tag-mid">Segunda</div>
+    </div>
+    <div class="card">
+      <div class="name">Executor</div>
+      <div class="lens">Ejecución</div>
+      <div class="verdict-tag tag-mid">Mejor si se construye</div>
+    </div>
+    <div class="card">
+      <div class="name">Outsider</div>
+      <div class="lens">UX humana</div>
+      <div class="verdict-tag tag-mid">Fricción + privacidad</div>
+    </div>
+    <div class="card">
+      <div class="name">Expansionist</div>
+      <div class="lens">Upside</div>
+      <div class="verdict-tag tag-blind">✗ Punto ciego · 5/5</div>
+    </div>
+  </div>
+
+  <!-- VEREDICTO -->
+  <h2><span class="dot" style="background:var(--accent)"></span>Veredicto del Chairman</h2>
+  <div class="verdict">
+    <div class="block">
+      <h3>Donde el consejo coincide</h3>
+      <ul class="agree">
+        <li>El premio real (CPL 2-3x) <b>no necesita la página</b>: se logra 100% consolidando en <b>una campaña + un formulario + un evento CAPI</b>. Cobrable ya.</li>
+        <li>La confirmación de teléfono es el <b>eslabón más débil</b>: fricción/desconfianza en salud, no es determinístico (Meta prellena, la persona tipea de memoria), y crea un <b>oráculo de enumeración</b> sobre datos sensibles.</li>
+        <li>El <b>cron de 2-5 min no sirve</b> acá: si se construye, el webhook debe ingestar claim-first <b>síncrono</b> con lock/unique constraint.</li>
+        <li><b>Correr en paralelo NO baja el CPL</b> hasta matar las 6 campañas viejas. Time-boxear el apagado.</li>
+      </ul>
+    </div>
+    <div class="block">
+      <h3>Donde el consejo choca</h3>
+      <p><b>Upside de la página</b> (real, pero Fase 2+) vs. <b>riesgo no medido</b> (4 asesores + 5 revisores): no se puede apoyar el MVP en un upside que descansa sobre un supuesto sin validar.</p>
+      <p><b>“Que escriba la asesora”</b> choca con las reglas de WhatsApp: el outbound en frío a escala quema números y exige plantillas, mientras el tap del lead abre la ventana de 24h gratis. No es uno o el otro.</p>
+    </div>
+    <div class="block">
+      <h3>El punto que lo reordena todo</h3>
+      <p>La pantalla de gracias de Meta es un <b>botón que hay que tocar</b>: el tap-through es solo <b>~20-40%</b>. La página <b>nunca puede ser el router primario</b> — solo ve una fracción. El backbone del 100% es el webhook claim-first; la página es, a lo sumo, una capa fina para el que toca.</p>
+    </div>
+    <div class="block">
+      <h3>La recomendación</h3>
+      <div class="rec"><b style="color:var(--accent)">1 · Ahora (backbone, bajo riesgo):</b> una campaña + un form + CAPI consolidado + <b>webhook claim-first síncrono</b>. Da el CPL 2-3x y cubre el 100% de los leads con la asesora asignada al toque. Time-boxeá el apagado de las 6 viejas. Instrumentá 4 métricas: tap-through, match-rate de teléfono, tiempo de respuesta de asesora, costo por venta (holdout).</div>
+      <div class="rec"><b style="color:var(--danger)">2 · No construir</b> la página de confirmación de teléfono como está: eslabón más débil en todos los ejes, y solo ve la minoría que toca.</div>
+      <div class="rec"><b style="color:var(--info)">3 · Para la minoría que sí toca:</b> versión mínima segura <b>sin pedir teléfono</b> — asigna least-loaded en el momento y muestra el WhatsApp (o cae a un pooled). Decidí si el lead-initiated 24h vale el esfuerzo con los números en la mano.</div>
+    </div>
+  </div>
+
+  <div class="first">
+    <b>Lo primero que hay que hacer →</b> Consolidá: creá la única campaña + único formulario + único evento CAPI, y meté la <b>ingesta claim-first síncrona en el webhook de ese <code>form_id</code></b>. Eso te da el premio (CPL) sin nada del riesgo del router, y genera los 4 números que deciden si la página vale la pena.
+  </div>
+
+  <!-- BLIND SPOTS -->
+  <h2><span class="dot" style="background:var(--warn)"></span>Puntos ciegos que cazó el peer review</h2>
+  <div class="miss">
+    <ol>
+      <li><b>La página solo ve el 20-40%</b> que toca el botón → jamás puede ser el router primario. El webhook claim-first es el único backbone del 100%.</li>
+      <li><b>Reglas de WhatsApp:</b> lead-initiated (tap) = ventana de 24h gratis; advisor-initiated a escala = plantillas + riesgo de baneo del número.</li>
+      <li><b>El cuello real es el tiempo de respuesta de la asesora</b>, no el handoff de 30 seg. Si contesta en 3hs, el mecanismo da igual.</li>
+      <li><b>La métrica correcta es costo por VENTA, no CPL.</b> Consolidar baja el CPL casi mecánico; hace falta un holdout para probar el 2-3x real.</li>
+      <li><b>El browser in-app de IG/FB</b> rompe redirect y pixel.</li>
+      <li><b>Las compradoras PAGAN por los leads:</b> si los fallbacks caen a un WhatsApp default, rompés el reparto justo y la confianza del comprador.</li>
+    </ol>
+  </div>
+
+  <!-- POSICIONES -->
+  <h2><span class="dot" style="background:var(--info)"></span>Las cinco posiciones, en una línea</h2>
+  <div class="spectrum">
+    <div class="row"><div class="lbl" style="color:#a78bfa">First Principles</div><div class="txt">Son dos problemas. El CPL se arregla consolidando, sin página. Matá la página y muere la cascada.</div></div>
+    <div class="row"><div class="lbl" style="color:#f87171">Contrarian</div><div class="txt">El router resuelve la dirección equivocada: la asesora contacta al lead. Medí match-rate antes de construir. Time-boxeá el apagado.</div></div>
+    <div class="row"><div class="lbl" style="color:#34d399">Executor</div><div class="txt">Si se construye: cron no sirve, webhook síncrono + fallback claim-first + unique constraint + Turnstile. Lunes: form único.</div></div>
+    <div class="row"><div class="lbl" style="color:#fbbf24">Outsider</div><div class="txt">Re-pedir el teléfono grita “spam/roto” en salud. Nunca pantalla muerta. Nunca reveles nada de un teléfono tipeado.</div></div>
+    <div class="row"><div class="lbl" style="color:#60a5fa">Expansionist</div><div class="txt">La página es palanca: CAPI determinístico, roster 6→60, calificación en la página. El teléfono es filtro, no fricción.</div></div>
+  </div>
+
+  <!-- RESPUESTAS COMPLETAS -->
+  <h2><span class="dot" style="background:var(--faint)"></span>Respuestas completas</h2>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#a78bfa"></span>First Principles Thinker · <span style="color:var(--muted);font-weight:400">“son dos problemas fusionados”</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>Están fusionando dos problemas. Problema A: la subasta y el aprendizaje de Meta fragmentados. Problema B: llevar a la persona al WhatsApp correcto. El premio real —bajar el CPL 2-3x— es 100% el Problema A, y se resuelve con UNA campaña + UN formulario + UN evento CAPI. Eso no necesita ninguna página router. Consolidá y cobrá ese beneficio ya, hoy.</p>
+      <p>El router es el Problema B, y ahí hacen la pregunta equivocada. Preguntan “¿cómo identifico a la persona?”. La pregunta es “¿por qué necesito que la persona vuelva a clickear hacia el WhatsApp?”. No lo necesitás: el teléfono ya entró por el webhook, el deal ya se asignó, la asesora puede escribir ELLA. La función claim-first que ya construiste resuelve el 100% de los leads que hoy no clickean.</p>
+      <p>Si igual querés el clic “en caliente”, el diseño actual es el peor de dos mundos: el único valor del formulario nativo es fricción cero, y le pegás un muro de “reescribí tu teléfono” justo post-conversión. Fundís el CTR ahí. Y si la fricción se acepta, ¿para qué Lead Ads? Un formulario en página propia te da un identificador real en la URL gratis: cero carrera, cero endpoint enumerable.</p>
+      <p>Ese es el olor de fondo: usás a un humano reescribiendo su teléfono como ID de correlación entre dos sistemas async, porque Meta no te lo da. Toda la cascada —carrera, doble asignación, oráculo de enumeración con datos de salud— nace de esa sola decisión. Matá la página y muere la cascada. Consolidá primero.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#f87171"></span>Contrarian · <span style="color:var(--muted);font-weight:400">“resuelve la dirección equivocada”</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>La falla fatal no está en tus 5 preguntas: está en que el router resuelve la dirección equivocada del contacto. En Lead Ads la asesora contacta al lead, no al revés. Vos YA tenés el teléfono en el webhook; la asesora asignada puede escribir en 30 segundos. La página que pide el teléfono de nuevo solo sirve para que el LEAD inicie el chat, y estás pagando eso con fricción, carrera y un oráculo de enumeración. Antes de construir nada: probá que “lead-initiated en 2 min” le gana a “asesora-initiated en 30 seg”.</p>
+      <p>Segundo: el teléfono NO es determinístico. Meta prellena desde el perfil de FB; en tu página lo tipea de memoria. +54 9 vs 15 vs sin código, typo, el celular del perfil ≠ el WhatsApp que usa. Cada miss es lead perdido o mal ruteado. Medí el match-rate real.</p>
+      <p>Tercero, el que más me quema: la página pública es un oráculo de teléfonos. Tipeo números y me dice si esa persona es lead y a qué asesora cayó. Enumerable. Rate-limit no alcanza.</p>
+      <p>Cuarto: correr en paralelo NO baja el CPL. Son 7 campañas canibalizándose hasta que MATES las 6 viejas. Time-boxealo. La carrera temporal es síntoma: si la asesora escribe primero igual, el race deja de importar. Ahí está la pista de que sobra la mitad del diseño.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#34d399"></span>Executor · <span style="color:var(--muted);font-weight:400">“si se construye, así”</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>Es sólido, con un agujero que hay que tapar sí o sí: el cron de 2-5 min. Para este flujo la persona llega antes de que ingeste nada. La solución no es polling lindo: es hacer la ingesta claim-first SÍNCRONA en el webhook para el form nuevo. Meta dispara en ~1s; entre que la persona lee, tipea y manda el teléfono pasan 5-15s. El deal ya va a existir casi siempre.</p>
+      <p><b>1. Identificación:</b> reuso puro, <code>normalizeArgentinePhone</code> + <code>findExistingContact</code>. Riesgo: el número tipeado ≠ el que Meta prellenó → fallback obligatorio.</p>
+      <p><b>2. Carrera:</b> webhook síncrono + página reintenta cada 1s hasta ~20s con “esperá un segundo”; si a los N intentos no hay deal, la página misma corre claim-first y asigna ahí. No dependés de ganar la carrera.</p>
+      <p><b>3. Paralelo al legacy:</b> routeá por <code>form_id</code>. La asignación least-loaded en transacción con lock o unique constraint + <code>ON CONFLICT</code>, o webhook y fallback duplican deal.</p>
+      <p><b>4. MVP:</b> 1 route API, 1 página con input+polling, webhook síncrono, rate limit. Diferís UI polida, multi-campaña, analytics.</p>
+      <p><b>5. Seguridad:</b> oráculo de enumeración. Devolver SOLO el link, cero PII, Turnstile invisible + rate limit por IP. <b>Lunes:</b> creá el form único, agarrá el <code>form_id</code>, ingesta síncrona en el webhook.</p>
+      <p style="color:var(--faint);font-size:.85em">Nota: escribió “wa.me” como abreviatura; la restricción real del proyecto es siempre <code>api.whatsapp.com/send</code>.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#fbbf24"></span>Outsider · <span style="color:var(--muted);font-weight:400">“grita spam en salud”</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>Ponete en la piel de quien tocó el botón: dio su teléfono hace dos segundos y una página desconocida se lo vuelve a pedir. Lectura instantánea: “algo falló” o “esto es trucho”. En salud, donde la gente esquiva llamados de venta, pedir el número de nuevo dispara la alarma de spam. Una parte grande cierra: perdiste el lead que YA pagaste.</p>
+      <p>Peor los tiempos: llega en 1-2 seg y el sistema tarda en registrarlo; muchísimos caen antes de existir en tu base. Si la página dice “no encontramos tu número”, es un cartel de “roto”. Nunca pantalla muerta: mostrá “te estamos conectando con tu asesora...” y si en X seg no aparece, mandala igual a un WhatsApp por defecto.</p>
+      <p>Lo innecesariamente complicado: le pedís AL USUARIO que haga el trabajo de identificarse para resolver un problema TUYO. A la persona no le importa “qué asesora le tocó” — solo quiere hablar con alguien ya. Repartí vos en la página sin pedir nada.</p>
+      <p>Y lo grave: la página es pública. Si escribo el número de un tercero y me devuelve algo, confirmás que esa persona pidió info de un seguro de salud. Es un dato sensible filtrado y habilita a raspar tu base número por número. Nunca reveles nada a partir de un teléfono tipeado a mano.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#60a5fa"></span>Expansionist · <span style="color:var(--muted);font-weight:400">“la página es una palanca” (punto ciego, 5/5)</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>La página propia no es “fricción con un teléfono”: es la palanca que hoy no ves.</p>
+      <p><b>1. CAPI determinístico = CPL por debajo de tu meta.</b> La página captura el teléfono normalizado = match key perfecto, conversiones server-side de match quality altísimo. Los 1000–1500 son piso. Y el click al botón de WhatsApp es OTRO evento optimizable.</p>
+      <p><b>2. Sumar compradoras cuesta CERO.</b> Hoy asesora nueva = campaña nueva = más canibalización; esta arquitectura invierte el signo. Agregás una fila en Miembros. No vas de 6 a 8, vas de 6 a 60.</p>
+      <p><b>3. Una pregunta más = routing inteligente.</b> Pedí obra social/plan/zona; repartís por especialidad, no least-loaded. Lead pre-calificado = cierra más. El teléfono no es fricción, es filtro. Y el pixel propio → lookalikes hoy imposibles.</p>
+      <p>Mínimo: página + captura de teléfono + CAPI del click; el resto es iteración.</p>
+      <p style="color:var(--danger);font-size:.85em">El peer review (5/5) lo marcó como el punto ciego: todo este upside descansa sobre un supuesto sin medir — que el teléfono tipeado matchea y que la gente completa la página.</p>
+    </div>
+  </details>
+
+  <footer>
+    Generado por LLM Council · 5 asesores + peer review a ciegas + síntesis del chairman.<br>
+    Tema: MVP router multi-asesor / routing por confirmación de teléfono · 2026-07-13 21:27.<br>
+    Transcripción completa: <code>council-transcript-2026-07-13-212741.md</code>
+  </footer>
+</div>
+</body>
+</html>
