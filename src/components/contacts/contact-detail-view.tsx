@@ -36,13 +36,24 @@ import {
   Save,
   X,
   LayoutTemplate,
+  ChevronDown,
 } from 'lucide-react';
+import { humanizeFieldName, humanizeFormValue } from '@/lib/leads/humanize';
 
 interface ContactDetailViewProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contactId: string | null;
   onUpdated: () => void;
+  /** Tab inicial. Desde un lead se abre en "form" para ver las
+   *  respuestas del formulario primero. Default: "details". */
+  defaultTab?: string;
+}
+
+interface StageOption {
+  id: string;
+  name: string;
+  color: string;
 }
 
 export function ContactDetailView({
@@ -50,6 +61,7 @@ export function ContactDetailView({
   onOpenChange,
   contactId,
   onUpdated,
+  defaultTab = 'details',
 }: ContactDetailViewProps) {
   const supabase = createClient();
   const { accountId } = useAuth();
@@ -91,6 +103,10 @@ export function ContactDetailView({
   // Deals tab
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loadingDeals, setLoadingDeals] = useState(false);
+
+  // Estado (etapa) editable en el header, sobre el deal más reciente.
+  const [stages, setStages] = useState<StageOption[]>([]);
+  const [headerStageId, setHeaderStageId] = useState('');
 
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
@@ -172,8 +188,32 @@ export function ContactDetailView({
       .eq('contact_id', contactId)
       .order('created_at', { ascending: false });
     setDeals((data ?? []) as Deal[]);
+    const first = (data ?? [])[0];
+    if (first) setHeaderStageId(first.stage_id as string);
     setLoadingDeals(false);
   }, [contactId, supabase]);
+
+  // Catálogo de etapas de la cuenta, para el select de estado del header.
+  const fetchStages = useCallback(async () => {
+    if (!accountId) return;
+    const { data } = await supabase
+      .from('pipelines')
+      .select('stages:pipeline_stages(id, name, color, position)')
+      .eq('account_id', accountId);
+    const flat = (data ?? [])
+      .flatMap(
+        (p) =>
+          (p.stages ?? []) as {
+            id: string;
+            name: string;
+            color: string;
+            position: number;
+          }[],
+      )
+      .sort((a, b) => a.position - b.position)
+      .map((s) => ({ id: s.id, name: s.name, color: s.color }));
+    setStages(flat);
+  }, [accountId, supabase]);
 
   useEffect(() => {
     if (open && contactId) {
@@ -182,8 +222,27 @@ export function ContactDetailView({
       fetchNotes();
       fetchCustomFields();
       fetchDeals();
+      fetchStages();
     }
-  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals]);
+  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, fetchStages]);
+
+  async function changeStage(nextStageId: string) {
+    const primary = deals[0];
+    if (!primary || !nextStageId || nextStageId === headerStageId) return;
+    const prev = headerStageId;
+    setHeaderStageId(nextStageId); // optimista
+    const { error } = await supabase
+      .from('deals')
+      .update({ stage_id: nextStageId })
+      .eq('id', primary.id);
+    if (error) {
+      setHeaderStageId(prev);
+      toast.error('No se pudo cambiar la etapa');
+    } else {
+      fetchDeals(); // mantiene la tab Deals en sync
+      onUpdated();
+    }
+  }
 
   async function copyPhone() {
     if (!contact) return;
@@ -434,6 +493,38 @@ export function ContactDetailView({
                   </div>
                 </div>
               </div>
+              {deals[0] && stages.length > 0 && (
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Estado</span>
+                  {(() => {
+                    const color =
+                      stages.find((s) => s.id === headerStageId)?.color ??
+                      '#94a3b8';
+                    return (
+                      <span className="relative inline-flex">
+                        <select
+                          value={headerStageId}
+                          onChange={(e) => changeStage(e.target.value)}
+                          aria-label="Cambiar etapa"
+                          className="cursor-pointer appearance-none rounded-full py-1 pl-2.5 pr-6 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          style={{ backgroundColor: `${color}22`, color }}
+                        >
+                          {stages.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown
+                          aria-hidden
+                          className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2"
+                          style={{ color }}
+                        />
+                      </span>
+                    );
+                  })()}
+                </div>
+              )}
               <div className="mt-3">
                 <Button
                   size="sm"
@@ -452,8 +543,18 @@ export function ContactDetailView({
             </SheetHeader>
 
             {/* Tabs */}
-            <Tabs defaultValue="details" className="flex-1 flex flex-col min-h-0">
+            <Tabs
+              key={contactId ?? 'none'}
+              defaultValue={defaultTab}
+              className="flex-1 flex flex-col min-h-0"
+            >
               <TabsList className="bg-muted/50 border-b border-border mx-4 mt-3">
+                <TabsTrigger
+                  value="form"
+                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                >
+                  Formulario
+                </TabsTrigger>
                 <TabsTrigger
                   value="details"
                   className="data-active:bg-muted data-active:text-primary text-muted-foreground"
@@ -485,6 +586,53 @@ export function ContactDetailView({
                   Deals
                 </TabsTrigger>
               </TabsList>
+
+              {/* Formulario Tab — respuestas del lead, legibles y read-only */}
+              <TabsContent value="form" className="flex-1 overflow-y-auto px-4 py-3">
+                {loadingCustom ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  (() => {
+                    const formRows = customFields
+                      .map((f) => ({
+                        name: f.field_name,
+                        value: customValues[f.id] ?? '',
+                      }))
+                      .filter(
+                        (r) =>
+                          r.value.trim() &&
+                          r.name.trim().toLowerCase() !== 'id',
+                      )
+                      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+                    if (formRows.length === 0) {
+                      return (
+                        <p className="py-8 text-center text-sm text-muted-foreground">
+                          Este lead no cargó respuestas en el formulario.
+                        </p>
+                      );
+                    }
+                    return (
+                      <dl className="space-y-2">
+                        {formRows.map((r) => (
+                          <div
+                            key={r.name}
+                            className="rounded-lg border border-border/50 bg-muted/50 p-3"
+                          >
+                            <dt className="text-xs text-muted-foreground">
+                              {humanizeFieldName(r.name)}
+                            </dt>
+                            <dd className="mt-0.5 whitespace-pre-wrap text-sm text-foreground">
+                              {humanizeFormValue(r.value)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    );
+                  })()
+                )}
+              </TabsContent>
 
               {/* Details Tab */}
               <TabsContent value="details" className="flex-1 overflow-y-auto px-4 py-3">

@@ -10,6 +10,7 @@ import {
 // el agente recibe UN push ("8 leads nuevos"), no ocho.
 
 export interface LeadForAlert {
+  leadId: string;
   name: string | null;
   campaign: string | null;
 }
@@ -22,7 +23,9 @@ export function buildLeadAlert(leads: LeadForAlert[]): PushPayload {
     return {
       title: "Nuevo lead",
       body: campaign ? `${name} — ${campaign}` : name,
-      url: "/leads",
+      // Deep-link al detalle de ESE lead: /leads lee ?lead y abre el
+      // panel. Con varios leads no se puede apuntar a uno → /leads pelado.
+      url: `/leads?lead=${leads[0].leadId}`,
       tag: "new-lead",
     };
   }
@@ -35,6 +38,7 @@ export function buildLeadAlert(leads: LeadForAlert[]): PushPayload {
 }
 
 interface LeadAlertRow {
+  id: string;
   campaign_name: string | null;
   form_name: string | null;
   contact: { name: string | null } | null;
@@ -56,7 +60,7 @@ export async function notifyNewLeads(
   const { data: rows } = await admin
     .from("leads")
     .select(
-      "campaign_name, form_name, contact:contacts(name), deal:deals(assigned_agent_id)",
+      "id, campaign_name, form_name, contact:contacts(name), deal:deals(assigned_agent_id)",
     )
     .eq("account_id", accountId)
     .eq("status", "processed")
@@ -69,6 +73,7 @@ export async function notifyNewLeads(
     const agent = row.deal?.assigned_agent_id ?? null;
     const list = byAgent.get(agent) ?? [];
     list.push({
+      leadId: row.id,
       name: row.contact?.name ?? null,
       campaign: row.campaign_name ?? row.form_name,
     });

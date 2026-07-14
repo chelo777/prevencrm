@@ -4,6 +4,8 @@ import { getCurrentAccount } from "@/lib/auth/account";
 import { WhatsAppButton } from "./whatsapp-button";
 import { LeadFilters } from "./filters";
 import { StageSelect, type StageOption } from "./stage-select";
+import { LeadDetailProvider } from "./lead-detail-provider";
+import { LeadNameCell } from "./lead-name-cell";
 
 export const dynamic = "force-dynamic";
 
@@ -146,6 +148,22 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     .eq("account_id", accountId)
     .eq("resolved", false);
 
+  // Deep-link ?lead=<id> (desde el push de nuevo lead): resolvemos el
+  // contacto para abrir el panel al montar. El lead puede no estar en la
+  // página actual del paginado, por eso el fetch puntual bajo RLS.
+  const deepLinkLead =
+    typeof params.lead === "string" && params.lead ? params.lead : null;
+  let deepLinkContactId: string | null = null;
+  if (deepLinkLead) {
+    const { data: dl } = await supabase
+      .from("leads")
+      .select("contact_id")
+      .eq("id", deepLinkLead)
+      .eq("account_id", accountId)
+      .maybeSingle();
+    deepLinkContactId = (dl?.contact_id as string | null) ?? null;
+  }
+
   const rows = (leads ?? []) as unknown as LeadRow[];
   const total = count ?? rows.length;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
@@ -161,7 +179,8 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
+    <LeadDetailProvider initialContactId={deepLinkContactId}>
+      <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Leads</h1>
@@ -242,17 +261,12 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                 return (
                   <tr key={lead.id} className="border-b border-border/60 last:border-0">
                     <td className="px-3 py-3 sm:px-4">
-                      <div className="font-medium text-foreground">
-                        {lead.contact?.name || "Sin nombre"}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {lead.contact?.phone || "—"}
-                        {!lead.phone_valid && (
-                          <span className="ml-2 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">
-                            revisar teléfono
-                          </span>
-                        )}
-                      </div>
+                      <LeadNameCell
+                        contactId={lead.contact?.id ?? null}
+                        name={lead.contact?.name || "Sin nombre"}
+                        phone={lead.contact?.phone ?? null}
+                        phoneValid={lead.phone_valid}
+                      />
                       {leadTags.length > 0 && (
                         <div className="mt-1 md:hidden">
                           <TagList tags={leadTags} />
@@ -326,6 +340,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </LeadDetailProvider>
   );
 }
