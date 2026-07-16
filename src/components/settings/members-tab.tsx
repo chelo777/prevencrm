@@ -74,6 +74,7 @@ import {
 import { InviteMemberDialog } from './invite-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
 import { ROLE_META } from './role-meta';
+import { MemberAccessControls } from './member-access-controls';
 
 interface Member {
   user_id: string;
@@ -82,6 +83,8 @@ interface Member {
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+  allowed_modules: string[] | null;
+  blocked: boolean;
 }
 
 interface Invitation {
@@ -408,7 +411,7 @@ export function MembersTab() {
                       below the identity block; on desktop it sits
                       inline. Items align to the start on mobile so the
                       role dropdown lines up under the avatar. */}
-                  <div className="flex items-center gap-2 sm:gap-3">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     {/* Role display / editor. Inline Select is admin+
                         only AND not allowed on the owner row (owner
                         changes go through transfer, which lands later). */}
@@ -445,6 +448,20 @@ export function MembersTab() {
                         {roleMeta.label}
                       </span>
                     )}
+
+                    {/* Gating de módulos + pausar acceso. Solo para
+                        asesoras (agent/viewer) — admin/owner no se gatean. */}
+                    {canManageMembers &&
+                      !isSelf &&
+                      (member.role === "agent" || member.role === "viewer") && (
+                        <MemberAccessControls
+                          userId={member.user_id}
+                          name={member.full_name}
+                          allowedModules={member.allowed_modules}
+                          blocked={member.blocked}
+                          onUpdated={loadEverything}
+                        />
+                      )}
 
                     {/* Remove. Admin+ only; never on the owner row;
                         never on yourself. Pre-polish styling was

@@ -25,7 +25,14 @@ interface ProfileRow {
   avatar_url: string | null;
   account_role: string;
   created_at: string;
+  allowed_modules: string[] | null;
+  blocked: boolean | null;
 }
+
+type MemberOut = AccountMember & {
+  allowed_modules: string[] | null;
+  blocked: boolean;
+};
 
 export async function GET() {
   try {
@@ -35,7 +42,9 @@ export async function GET() {
     // the caller's, so this query is naturally account-scoped.
     const { data, error } = await ctx.supabase
       .from("profiles")
-      .select("user_id, full_name, email, avatar_url, account_role, created_at")
+      .select(
+        "user_id, full_name, email, avatar_url, account_role, created_at, allowed_modules, blocked",
+      )
       .eq("account_id", ctx.accountId)
       .order("created_at", { ascending: true });
 
@@ -49,7 +58,7 @@ export async function GET() {
 
     const canSeeEmails = canManageMembers(ctx.role);
 
-    const members: AccountMember[] = (data as ProfileRow[]).flatMap((row) => {
+    const members: MemberOut[] = (data as ProfileRow[]).flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
       // through, but if a migration ever broadens the enum without
       // updating TS, skip the row rather than crash the page.
@@ -62,6 +71,8 @@ export async function GET() {
           avatar_url: row.avatar_url,
           role: row.account_role,
           joined_at: row.created_at,
+          allowed_modules: row.allowed_modules ?? null,
+          blocked: Boolean(row.blocked),
         },
       ];
     });

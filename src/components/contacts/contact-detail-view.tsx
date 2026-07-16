@@ -64,7 +64,7 @@ export function ContactDetailView({
   defaultTab = 'details',
 }: ContactDetailViewProps) {
   const supabase = createClient();
-  const { accountId } = useAuth();
+  const { accountId, canManageMembers } = useAuth();
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -107,6 +107,12 @@ export function ContactDetailView({
   // Estado (etapa) editable en el header, sobre el deal más reciente.
   const [stages, setStages] = useState<StageOption[]>([]);
   const [headerStageId, setHeaderStageId] = useState('');
+
+  // Reasignación (solo admin): asesoras compradoras + a quién está el deal.
+  const [asesoras, setAsesoras] = useState<
+    { user_id: string; full_name: string | null }[]
+  >([]);
+  const [assignedAgentId, setAssignedAgentId] = useState('');
 
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
@@ -189,9 +195,45 @@ export function ContactDetailView({
       .order('created_at', { ascending: false });
     setDeals((data ?? []) as Deal[]);
     const first = (data ?? [])[0];
-    if (first) setHeaderStageId(first.stage_id as string);
+    if (first) {
+      setHeaderStageId(first.stage_id as string);
+      setAssignedAgentId((first.assigned_agent_id as string | null) ?? '');
+    }
     setLoadingDeals(false);
   }, [contactId, supabase]);
+
+  // Asesoras compradoras (para el selector de reasignación del admin).
+  const fetchAsesoras = useCallback(async () => {
+    if (!accountId || !canManageMembers) return;
+    const { data } = await supabase
+      .from('profiles')
+      .select('user_id, full_name')
+      .eq('account_id', accountId)
+      .eq('is_lead_buyer', true)
+      .order('full_name');
+    setAsesoras((data ?? []) as { user_id: string; full_name: string | null }[]);
+  }, [accountId, canManageMembers, supabase]);
+
+  // Registra una acción en el event log (append-only). Best-effort: si
+  // falla, no rompe la acción principal (RLS exige user_id = auth.uid()).
+  const logActivity = useCallback(
+    async (action: string, dealId: string | null, meta?: Record<string, unknown>) => {
+      if (!accountId) return;
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const uid = session?.user?.id;
+      if (!uid) return;
+      await supabase.from('activity_log').insert({
+        account_id: accountId,
+        user_id: uid,
+        deal_id: dealId,
+        action,
+        meta: meta ?? null,
+      });
+    },
+    [accountId, supabase],
+  );
 
   // Catálogo de etapas de la cuenta, para el select de estado del header.
   const fetchStages = useCallback(async () => {
@@ -223,8 +265,9 @@ export function ContactDetailView({
       fetchCustomFields();
       fetchDeals();
       fetchStages();
+      fetchAsesoras();
     }
-  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, fetchStages]);
+  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, fetchStages, fetchAsesoras]);
 
   async function changeStage(nextStageId: string) {
     const primary = deals[0];
@@ -239,7 +282,30 @@ export function ContactDetailView({
       setHeaderStageId(prev);
       toast.error('No se pudo cambiar la etapa');
     } else {
+      logActivity('stage_change', primary.id, { stage_id: nextStageId });
       fetchDeals(); // mantiene la tab Deals en sync
+      onUpdated();
+    }
+  }
+
+  // Reasignar el deal a otra asesora (admin). Actualiza assigned_agent_id
+  // y registra la acción en el event log.
+  async function reassign(nextAgentId: string) {
+    const primary = deals[0];
+    if (!primary || nextAgentId === assignedAgentId) return;
+    const prev = assignedAgentId;
+    setAssignedAgentId(nextAgentId); // optimista
+    const { error } = await supabase
+      .from('deals')
+      .update({ assigned_agent_id: nextAgentId || null })
+      .eq('id', primary.id);
+    if (error) {
+      setAssignedAgentId(prev);
+      toast.error('No se pudo reasignar');
+    } else {
+      logActivity('reassigned', primary.id, { assigned_agent_id: nextAgentId });
+      toast.success('Lead reasignado');
+      fetchDeals();
       onUpdated();
     }
   }
@@ -523,6 +589,26 @@ export function ContactDetailView({
                       </span>
                     );
                   })()}
+                </div>
+              )}
+              {canManageMembers && deals[0] && asesoras.length > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    Asignada a
+                  </span>
+                  <select
+                    value={assignedAgentId}
+                    onChange={(e) => reassign(e.target.value)}
+                    aria-label="Reasignar lead"
+                    className="cursor-pointer rounded-md border border-border bg-muted px-2 py-1 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="">Sin asignar</option>
+                    {asesoras.map((a) => (
+                      <option key={a.user_id} value={a.user_id}>
+                        {a.full_name || a.user_id.slice(0, 8)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
               <div className="mt-3">

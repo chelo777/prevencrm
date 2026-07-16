@@ -58,8 +58,45 @@ export async function PATCH(
     const { userId } = await params;
 
     const body = (await request.json().catch(() => null)) as
-      | { role?: unknown }
+      | { role?: unknown; allowed_modules?: unknown; blocked?: unknown }
       | null;
+
+    // Configurar los módulos visibles de un miembro (agent). null = default.
+    if (body && "allowed_modules" in body) {
+      const mods = body.allowed_modules;
+      if (
+        mods !== null &&
+        (!Array.isArray(mods) || mods.some((m) => typeof m !== "string"))
+      ) {
+        return NextResponse.json(
+          { error: "'allowed_modules' debe ser un array de strings o null" },
+          { status: 400 },
+        );
+      }
+      const { error } = await ctx.supabase.rpc("set_member_modules", {
+        p_user_id: userId,
+        p_modules: mods ?? null,
+      });
+      if (error) return rpcErrorToResponse(error);
+      return NextResponse.json({ ok: true });
+    }
+
+    // Pausar / reactivar el acceso de un miembro.
+    if (body && "blocked" in body) {
+      if (typeof body.blocked !== "boolean") {
+        return NextResponse.json(
+          { error: "'blocked' debe ser boolean" },
+          { status: 400 },
+        );
+      }
+      const { error } = await ctx.supabase.rpc("set_member_blocked", {
+        p_user_id: userId,
+        p_blocked: body.blocked,
+      });
+      if (error) return rpcErrorToResponse(error);
+      return NextResponse.json({ ok: true });
+    }
+
     const role = body?.role;
 
     if (!isAccountRole(role)) {
