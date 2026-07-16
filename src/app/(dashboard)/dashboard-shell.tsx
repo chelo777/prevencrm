@@ -1,19 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
+import { AccessBlocked } from "@/components/layout/access-blocked";
+import { canAccessPath, firstAllowedModule } from "@/lib/auth/modules";
 
 // Auth-gated dashboard shell. Extracted from the layout so the layout
 // itself can stay a server component and export metadata (noindex) —
 // client components can't export Next's metadata object.
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, profileLoading, accountRole, allowedModules, blocked } =
+    useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
   // always visible and this stays at `false` (ignored by the component).
@@ -25,6 +29,18 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
       router.push("/login");
     }
   }, [user, loading, router]);
+
+  // Guard de módulos (UX; RLS es el control de datos real): si la asesora
+  // cae en un módulo que no tiene permitido — por URL directa o por un
+  // link viejo — la mandamos a su primer módulo. El layout server hace el
+  // check de `blocked` en cada carga; acá lo cubrimos también en navegación.
+  useEffect(() => {
+    if (profileLoading || !accountRole || blocked) return;
+    if (!canAccessPath(accountRole, allowedModules, pathname)) {
+      const dest = firstAllowedModule(accountRole, allowedModules);
+      router.replace(dest ? `/${dest}` : "/settings?tab=profile");
+    }
+  }, [profileLoading, accountRole, allowedModules, blocked, pathname, router]);
 
   if (loading) {
     return (
@@ -38,6 +54,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  // Acceso pausado por el admin (belt-and-suspenders con el layout server).
+  if (!profileLoading && blocked) return <AccessBlocked />;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

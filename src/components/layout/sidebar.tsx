@@ -28,6 +28,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
+import { effectiveModules, type ModuleSlug } from "@/lib/auth/modules";
 
 // Per-role chip metadata used in the sidebar's account strip + the
 // Members tab roster. Keeping this near both consumers in a single
@@ -115,7 +116,23 @@ interface SidebarProps {
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { profile, profileLoading, account, accountRole, signOut } = useAuth();
+  const { profile, profileLoading, account, accountRole, allowedModules, signOut } =
+    useAuth();
+
+  // Gating de módulos: la asesora (agent) solo ve sus módulos habilitados;
+  // admin/owner ven todos. Mientras el rol no resolvió (null), mostramos la
+  // nav completa como chrome — el guard de ruta del server es el que corta
+  // de verdad. El slug del módulo es el primer segmento del href.
+  const visibleNavItems = accountRole
+    ? (() => {
+        const allowed = new Set<ModuleSlug>(
+          effectiveModules(accountRole, allowedModules),
+        );
+        return navItems.filter((item) =>
+          allowed.has(item.href.split("/").filter(Boolean)[0] as ModuleSlug),
+        );
+      })()
+    : navItems;
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
   // Only surface the account-name strip when it actually carries
@@ -207,7 +224,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         {/* Main navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== "/dashboard" && pathname.startsWith(item.href));

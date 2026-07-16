@@ -21,7 +21,6 @@ import type {
 } from "./types";
 
 const DEAL_CURRENCY = "ARS";
-const ASSIGNABLE_ROLES = ["owner", "admin", "agent"];
 
 export function createLeadRepository(
   admin: SupabaseClient,
@@ -210,7 +209,7 @@ export function createLeadRepository(
         .from("profiles")
         .select("user_id")
         .eq("account_id", accountId)
-        .in("account_role", ASSIGNABLE_ROLES);
+        .eq("is_lead_buyer", true);
       if (error) throw error;
       const userIds = (members ?? []).map((m) => m.user_id as string);
       if (userIds.length === 0) return [];

@@ -34,6 +34,10 @@ interface Profile {
   beta_features: string[];
   account_id: string | null;
   account_role: AccountRole | null;
+  /** Módulos visibles para agent/viewer; null = default de código. */
+  allowed_modules: string[] | null;
+  /** Acceso pausado por el admin. */
+  blocked: boolean;
 }
 
 interface AccountSummary {
@@ -94,6 +98,10 @@ interface AuthContextValue {
   canEditSettings: boolean;
   /** True if the caller can send messages and edit operational data (agent+). */
   canSendMessages: boolean;
+  /** Módulos permitidos crudos (agent/viewer); null = default. Admin/owner lo ignoran. */
+  allowedModules: string[] | null;
+  /** Acceso pausado por el admin. */
+  blocked: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -130,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data, error } = await supabase
         .from("profiles")
         .select(
-          "id, full_name, email, avatar_url, role, beta_features, account_id, account_role",
+          "id, full_name, email, avatar_url, role, beta_features, account_id, account_role, allowed_modules, blocked",
         )
         .eq("user_id", userId)
         .maybeSingle();
@@ -201,6 +209,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           beta_features: data.beta_features ?? [],
           account_id: data.account_id ?? null,
           account_role: accountRole,
+          allowed_modules: (data.allowed_modules as string[] | null) ?? null,
+          blocked: Boolean(data.blocked),
         });
         setAccount(accountRow);
       } else {
@@ -332,6 +342,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signOut,
         refreshProfile,
         account,
+        allowedModules: profile?.allowed_modules ?? null,
+        blocked: profile?.blocked ?? false,
         ...derived,
       }}
     >
@@ -370,6 +382,8 @@ export function useAuth(): AuthContextValue {
       canManageMembers: false,
       canEditSettings: false,
       canSendMessages: false,
+      allowedModules: null,
+      blocked: false,
     };
   }
   return ctx;
