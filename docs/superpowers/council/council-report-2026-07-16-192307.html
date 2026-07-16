@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Council — CRM multi-asesor SP1</title>
+<style>
+  :root{
+    --bg:#0f1115; --surface:#171a21; --surface2:#1e222b; --border:#2a2f3a;
+    --ink:#e7e9ee; --muted:#9aa2b1; --faint:#6b7280;
+    --accent:#10b981; --warn:#f59e0b; --danger:#ef4444; --info:#60a5fa; --violet:#a78bfa;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;font-size:16px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 20px 80px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  h1{font-size:clamp(1.5rem,4vw,2.1rem);line-height:1.2;margin:.3em 0 .1em;letter-spacing:-0.02em;text-wrap:balance}
+  .sub{color:var(--muted);font-size:15px}
+  .q{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:18px 20px;margin:22px 0;font-size:15px;color:var(--muted)}
+  .q b{color:var(--ink);font-weight:600}
+  h2{font-size:1.15rem;margin:34px 0 14px;letter-spacing:-0.01em;display:flex;align-items:center;gap:9px}
+  h2 .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .verdict{background:linear-gradient(180deg,#161e1b,#141821);border:1px solid #245244;
+    border-radius:16px;padding:6px 26px 22px;margin:18px 0 10px}
+  .block{margin:20px 0}
+  .block h3{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:700}
+  .block p{margin:.3em 0}
+  .block li{margin:6px 0}
+  .rec{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin:10px 0}
+  .first{background:#2a1618;border:1px solid var(--danger);border-radius:var(--radius);
+    padding:16px 20px;margin:16px 0;font-size:15px}
+  .first b{color:#f87171}
+  ul{padding-left:20px;margin:.4em 0}
+  code{background:#0c0e12;border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.86em;color:#cbd5e1}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .card .name{font-weight:700;font-size:.9rem;margin-bottom:2px}
+  .card .lens{font-size:.72rem;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
+  .card .vt{margin-top:9px;font-size:.78rem;font-weight:600;display:inline-block;padding:2px 9px;border-radius:20px}
+  .tag-strong{background:rgba(16,185,129,.14);color:#34d399}
+  .tag-blind{background:rgba(239,68,68,.14);color:#f87171}
+  .tag-mid{background:rgba(154,162,177,.14);color:var(--muted)}
+  .spectrum{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin:16px 0}
+  .spectrum .row{display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-bottom:1px dashed var(--border)}
+  .spectrum .row:last-child{border-bottom:none}
+  .spectrum .lbl{flex:0 0 128px;font-weight:600;font-size:.85rem}
+  .spectrum .txt{font-size:.9rem;color:var(--muted)}
+  details{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin:10px 0;overflow:hidden}
+  details summary{cursor:pointer;padding:14px 18px;font-weight:600;list-style:none;display:flex;align-items:center;gap:10px}
+  details summary::-webkit-details-marker{display:none}
+  details summary .chev{margin-left:auto;color:var(--faint);transition:transform .2s}
+  details[open] summary .chev{transform:rotate(90deg)}
+  details .body{padding:0 18px 16px;color:var(--muted);font-size:.93rem}
+  details .body p{margin:.6em 0}
+  .lens-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .miss{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 20px 14px;margin:12px 0}
+  .miss li{margin:8px 0;font-size:.93rem;color:var(--muted)}
+  .miss li b{color:var(--ink)}
+  footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);color:var(--faint);font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">LLM Council · Pressure-test de spec</div>
+  <h1>CRM multi-asesor (SP1): roles admin/asesor + gating de módulos</h1>
+  <div class="sub">5 asesores + peer review a ciegas + síntesis · 2026-07-16</div>
+
+  <div class="q">
+    <b>Qué se analizó:</b> el spec (commit d34f9a7) para meter asesoras al CRM como usuarias controladas por un admin — gating de módulos (<code>allowed_modules</code> + guard de ruta + sidebar), bloquear (<code>blocked</code>), aislamiento RLS por <code>assigned_agent_id</code> (graduar 037/038 de otra rama), asignación auto + manual, UI admin vía RPCs (039). <b>Pregunta:</b> ¿qué problemas futuros NO ve el diseño (DB/RLS, seguridad, UX/UI, adopción, edge cases)?
+  </div>
+
+  <h2><span class="dot" style="background:var(--violet)"></span>Consenso del panel</h2>
+  <div class="grid">
+    <div class="card"><div class="name">Contrarian</div><div class="lens">Seguridad</div><div class="vt tag-strong">★ Más fuerte · 5/5</div></div>
+    <div class="card"><div class="name">Executor</div><div class="lens">Ejecución</div><div class="vt tag-mid">Complementa</div></div>
+    <div class="card"><div class="name">First Principles</div><div class="lens">Encuadre</div><div class="vt tag-mid">Adopción</div></div>
+    <div class="card"><div class="name">Outsider</div><div class="lens">UX asesora</div><div class="vt tag-mid">Adopción</div></div>
+    <div class="card"><div class="name">Expansionist</div><div class="lens">Upside</div><div class="vt tag-blind">✗ Punto ciego · 5/5</div></div>
+  </div>
+
+  <h2><span class="dot" style="background:var(--accent)"></span>Veredicto del Chairman</h2>
+  <div class="verdict">
+    <div class="block">
+      <h3>Donde el consejo coincide</h3>
+      <ul>
+        <li><b>El gating de módulos es cosmético; el único control real es RLS.</b> Una asesora con sesión pega a <code>/api/v1/...</code> (que no pasa por el layout) y trae todo. El sidebar y el guard son UX.</li>
+        <li><b>La 037 aísla solo la mitad.</b> Quedan con "todos ven todo": <code>quick_messages</code>, <code>push_subscriptions</code>, <code>custom_fields</code>, <code>contact_notes</code>, <code>contact_custom_values</code>, <code>tags</code>, <code>lead_capi_events</code> (¡PII de todas!). Auditar tabla por tabla.</li>
+        <li><b>Cherry-pick de 037/038 = riesgo</b> (colisión de número de migración al mergear + otro schema). Portar el SQL como fuente única en main.</li>
+        <li><b>El riesgo real es la adopción, no la técnica.</b> Todo son controles PARA el dueño, cero valor PARA la asesora.</li>
+      </ul>
+    </div>
+    <div class="block">
+      <h3>Donde el consejo choca</h3>
+      <p>Seguridad-primero (Contrarian/Executor) vs Adopción-primero (First Principles/Outsider) vs Upside (Expansionist). No son excluyentes — es una <b>secuencia mal ordenada</b>. Sin RLS es un leak; sin adopción no hay nada que asegurar; el upside es correcto pero llega 10 pasos antes.</p>
+    </div>
+    <div class="block">
+      <h3>La recomendación</h3>
+      <div class="rec"><b style="color:var(--accent)">1 · Piso de seguridad primero (no negociable):</b> auditar TODAS las tablas RLS, aislar las que 037 olvida, y verificar que <code>/api/v1</code> y toda ruta de API respetan RLS. Portar 037/038 como SQL nuevo (no cherry-pick). <code>assigned_agent_id NULL</code> visible para el admin. RPCs 039 con <code>WHERE account_id</code> + <code>blocked</code> que invalide la sesión.</div>
+      <div class="rec"><b style="color:var(--info)">2 · Reencuadre de SP1:</b> gating/blocked/allowed_modules son features de admin de cero adopción → mínimos. La verdadera pieza de SP1 = <b>UNA cosa de valor real para la asesora</b> (follow-up de WhatsApp semi-armado desde el panel de lead que ya existe).</div>
+      <div class="rec"><b style="color:var(--warn)">3 · Escala:</b> una asesora (Ale, ya adentro), no seis. Y sembrar el <b>event log inmutable</b> ahora aunque no se muestre (insumo del CAPI de calidad).</div>
+    </div>
+    <div class="block">
+      <h3>Lo primero que hay que hacer</h3>
+      <p>Auditar TODAS las tablas con RLS y cerrar el aislamiento completo + verificar <code>/api/v1</code> — <b>ANTES</b> de tocar una línea de UI de gating. Hoy, con el gating cosmético, meter una asesora real es filtrar datos (incluidos datos de salud) de todas las demás.</p>
+    </div>
+  </div>
+
+  <div class="first">
+    <b>⚠ El agujero que hunde el barco:</b> el feature estrella (gating de módulos) NO cierra el acceso — es UX. Mientras la API y las tablas no estén aisladas por RLS, cada asesora nueva puede leer los datos de todas las demás. Seguridad antes que UI.
+  </div>
+
+  <h2><span class="dot" style="background:var(--warn)"></span>Puntos ciegos que cazó el peer review</h2>
+  <div class="miss">
+    <ol>
+      <li><b>La "doble vida" con la planilla:</b> si la asesora sigue en su Excel, el CRM queda con datos vacíos/podridos → envenena el CAPI y las métricas. Falta el mecanismo que fuerce al CRM como única fuente de verdad.</li>
+      <li><b>Migración del Excel existente:</b> sin importar su historial, ninguna abandona la doble carga por más aislamiento que haya.</li>
+      <li><b>Legal / PII:</b> leads con datos de salud compartidos entre compradoras que compiten; revender PII no trabajada; qué pasa cuando una asesora se va "con sus leads".</li>
+      <li><b>Puerta de una sola vía:</b> si el rollout sale mal, dañás la relación con tus compradores — que son tu ingreso.</li>
+    </ol>
+  </div>
+
+  <h2><span class="dot" style="background:var(--info)"></span>Las cinco posiciones, en una línea</h2>
+  <div class="spectrum">
+    <div class="row"><div class="lbl" style="color:#f87171">Contrarian</div><div class="txt">El gating es teatro mientras exista /api/v1; RLS es el único muro y 037 olvida media docena de tablas con PII.</div></div>
+    <div class="row"><div class="lbl" style="color:#34d399">Executor</div><div class="txt">No cherry-pickees migraciones (colisión); custom claims en el JWT, no DB por request; inviteUserByEmail sin fricción.</div></div>
+    <div class="row"><div class="lbl" style="color:#a78bfa">First Principles</div><div class="txt">Estás construyendo la cerradura antes que la casa. El problema es adopción, no gating. Meté a UNA, no seis.</div></div>
+    <div class="row"><div class="lbl" style="color:#fbbf24">Outsider</div><div class="txt">La asesora entra como invitada a casa ajena; esconder y vigilar la manda de vuelta al Excel. Falta el anzuelo egoísta.</div></div>
+    <div class="row"><div class="lbl" style="color:#60a5fa">Expansionist</div><div class="txt">Meter a todas = un mercado (CAPI de calidad, pricing dinámico, SaaS). Falta el event log inmutable. (Punto ciego: llega antes de tiempo.)</div></div>
+  </div>
+
+  <h2><span class="dot" style="background:var(--faint)"></span>Respuestas completas</h2>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#f87171"></span>Contrarian · <span style="color:var(--muted);font-weight:400">"el gating es cosmético"</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>Falla fatal: el gating es cosmético mientras exista <code>/api/v1</code>. Las route handlers de API no pasan por el layout server. Una asesora con sesión hace <code>fetch('/api/v1/...')</code> desde la consola y trae todo. El único control real es RLS.</p>
+      <p>Y 037 se olvida de la mitad del modelo: <code>quick_messages</code>, <code>push_subscriptions</code>, <code>custom_fields</code>, <code>contact_notes</code>, <code>contact_custom_values</code>, <code>tags</code>, <code>lead_capi_events</code> siguen con <code>is_account_member</code> = todos ven todo. <code>contact_notes</code>/<code>contact_custom_values</code> cuelgan de contactos aislados: incoherencia. <code>lead_capi_events</code> tiene PII de todas. <code>push_subscriptions</code> = push a dispositivos ajenos. Auditá TODAS las tablas una por una.</p>
+      <p>Graduar 037/038 de otra rama es bomba (otro schema). Edge cases: leads sin asignar (NULL) ¿nadie los ve? blocked no revoca el JWT. Contacto con dos deals lo ven las dos asesoras. RPCs 039 sin <code>WHERE account_id</code> = editar módulos de cualquiera. Auditá tabla por tabla y cerrá <code>/api/v1</code> con RLS, no con redirects.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#34d399"></span>Executor · <span style="color:var(--muted);font-weight:400">"no cherry-pickees migraciones"</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>El cherry-pick de 037/038 es la primera trampa: mismo número de migración con distinto hash en dos ramas → al mergear, Supabase ve dos "037" y explota/duplica. Renumerá: graduá el contenido como 037/038 nuevas en main, en la rama router borralas y rebaseá. El código (repository.ts, lead-alerts.ts) sí cherry-pickealo; el SQL, fuente única en main.</p>
+      <p>Guard en layout server (Next 16 async) no cuesta arquitectura, pero NO pegues a la DB por request: custom claims en el JWT (<code>access_token</code> hook) o <code>React.cache</code>. Triple fuente de verdad: sidebar/guard son UX, RLS es la única seguridad — asumí que sidebar/guard mienten.</p>
+      <p>Invitación: usá <code>inviteUserByEmail</code>/<code>generateLink('invite')</code> (crea el user ya confirmado, sin fricción de verificación) y ahí seteás <code>is_lead_buyer</code>/<code>allowed_modules</code>. Orden lunes: (1) custom claims + RLS 037 con 2 usuarios; (2) modules.ts puro; (3) guard; (4) sidebar; (5) RPCs 039. Nada de UI de gating antes de que RLS aísle.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#a78bfa"></span>First Principles · <span style="color:var(--muted);font-weight:400">"la cerradura antes que la casa"</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>No es un problema de gating de módulos — ese es el error de encuadre. Seis compradoras independientes ya tienen un sistema que les funciona (planilla + WhatsApp) y querés que migren a uno peor para ellas y mejor para vos. "Ver si actualizan" es vigilancia, no valor. Nadie deja su herramienta por eso.</p>
+      <p>El SP1 correcto no es control de acceso: es "¿por qué una asesora abriría prevencrm mañana en vez de su Excel?". Las funciones de WhatsApp/automatización que "no están listas" no son el postre: son el plato principal, el único gancho real. Estás construyendo la cerradura antes que la casa.</p>
+      <p>Gating/blocked/allowed_modules son features de admin, cero adopción. El aislamiento sí importa (competencia entre compradoras) pero es infra, no razón para migrar. Hacé SP1 = "una cosa que la asesora hace más rápido en el CRM que en su planilla". Meté a UNA, no seis.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#fbbf24"></span>Outsider · <span style="color:var(--muted);font-weight:400">"invitada a casa ajena"</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>Le mandan un link para registrarse en el sistema del dueño y siente "esto no es mío". En su Excel era la dueña; acá entra como invitada. "Asesora" ya la baja de rango.</p>
+      <p>Esconder secciones es veneno: ella piensa "no confían en mí". Ver puertas que no puede abrir genera más ansiedad que no verlas. Si escondés, escondé de verdad. "Te asignaron leads" sin criterio → sospecha que le dan los peores y guarda los buenos en su planilla → doble carga, un pie afuera. "Cuenta suspendida" = castigo, lenguaje de banco.</p>
+      <p>Todo son controles PARA el dueño, cero beneficio PARA ella. Le falta el anzuelo egoísta: más/mejores leads, recordatorios de seguimiento, la comisión calculada sola, el WhatsApp armado. Si la app la hace ganar más con menos laburo, se olvida de que le esconden cosas. Si solo la vigila, la planilla gana.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="lens-dot" style="background:#60a5fa"></span>Expansionist · <span style="color:var(--muted);font-weight:400">"un mercado, no una feature" (punto ciego 5/5)</span><span class="chev">›</span></summary>
+    <div class="body">
+      <p>El diseño tapa un agujero cuando debería construir un activo. Meter a TODAS adentro convierte a Marcelo de vendedor de tandas en dueño de un mercado.</p>
+      <p>Dato de conversión real por asesora (tasa de calificación, velocidad) = insumo para el CAPI: señales de calidad de primera parte → baja el CPL de 2.262. Pricing dinámico (leads con score, premium por calientes, revenue-share). El módulo de venta de datos como exchange (revender el lead no trabajado en 24h). Y el SaaS: "el CRM para el que vende leads", con ranking y CAPI integrado.</p>
+      <p>El agujero que no ve: falta un event log inmutable de cada acción de la asesora. Sin eso, las métricas y el CAPI de calidad son frágiles. Metelo en SP1 aunque no lo muestres. Ahí está el 10x.</p>
+      <p style="color:var(--danger);font-size:.85em">Peer review (5/5): punto ciego — vuela al 10x sobre un piloto solo-Ale que ni cerró la RLS. Construye el piso 10 sin cimientos.</p>
+    </div>
+  </details>
+
+  <footer>
+    Generado por LLM Council · 5 asesores + peer review a ciegas + síntesis del chairman.<br>
+    Tema: pressure-test del spec CRM multi-asesor SP1 · 2026-07-16 19:23.<br>
+    Transcripción completa: <code>council-transcript-2026-07-16-192307.md</code> · Spec: <code>specs/2026-07-14-crm-multiasesor-admin-gating-design.md</code>
+  </footer>
+</div>
+</body>
+</html>

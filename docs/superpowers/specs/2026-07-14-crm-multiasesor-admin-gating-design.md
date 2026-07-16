@@ -1,118 +1,105 @@
-# CRM multi-asesor con control del admin (roles + gating de módulos) — Design
+# CRM multi-asesor con control del admin — Design (v2, post-council)
 
-**Fecha:** 2026-07-14
+**Fecha:** 2026-07-14 · **Revisado:** 2026-07-16 tras pressure-test del LLM Council.
 **Rama sugerida:** `feature/crm-multiasesor`
-**Sub-proyecto:** SP1 de 3 (SP2 = router/reparto por cupo, SP3 = módulo de venta de datos — ambos fuera de alcance).
+**Sub-proyecto:** SP1 de 3 (SP2 = router/reparto por cupo, SP3 = módulo de venta de datos — fuera de alcance).
+**Council:** `docs/superpowers/council/council-report-2026-07-16-192307.html` (+ transcript).
 
 ## Goal
 
-Meter a las asesoras (compradoras de leads) dentro del CRM como usuarias controladas por un admin. El admin da de alta asesoras, decide **qué módulos ve cada una** (ej. Paula solo Leads, porque WhatsApp/automatización todavía no están listos), puede **bloquear/habilitar** usuarios, y **ve el trabajo de todas** mientras cada asesora ve **solo lo suyo**. Esto habilita el "ver si están actualizando sus leads".
+Meter a las asesoras (compradoras de leads) al CRM de forma **segura** y con **valor real para ellas**, con control **mínimo** del admin. El admin ve el trabajo de todas; cada asesora ve solo lo suyo y trabaja su loop (leer el lead → WhatsApp pre-armado → mover etapa) más rápido que en su planilla.
 
-## Contexto (qué existe / qué falta)
+## Qué cambió el council (el reencuadre)
 
-**Existe y se reutiliza:**
-- Roles `owner/admin/agent/viewer` con doble enforcement: RLS SQL (`is_account_member(account_id, min_role)`) + predicados TS espejados (`src/lib/auth/roles.ts`). **Admin = owner/admin; Asesor = agent.**
-- Alta de usuarios por **invitación por link** (`invite-member-dialog.tsx`, RPCs 019, `/join/[token]`): el admin genera un link con un rol, la asesora se registra con Supabase Auth (su propio email + contraseña) y redime la invitación. Sin email service; el admin no toca credenciales.
-- Gestión de miembros: `members-tab.tsx`, RPCs 018 (`set_member_role`, `remove_account_member`), rutas `/api/account/members`.
-- Reparto automático de leads: `pickLeastLoaded()` + `listAssignableAgents()` en `src/lib/leads/`.
+El diseño original tenía el orden invertido y un agujero de seguridad:
+- **El gating de módulos es COSMÉTICO — el único control real es RLS.** El sidebar y el guard de ruta son UX; una asesora con sesión pega a `/api/v1/...` (que no pasa por el layout) o a cualquier route handler y trae todo. **Hoy, meter una asesora real filtra los datos de todas las demás, incluidos datos de salud.**
+- **La 037 aísla solo la mitad del modelo** — deja abiertas tablas con PII.
+- **El riesgo real es la adopción, no la técnica.** Controles PARA el dueño, cero valor PARA la asesora, no generan adopción.
 
-**Falta (lo nuevo de este proyecto):**
-- Gating de módulos por usuario. Hoy `sidebar.tsx` muestra **todos** los `navItems` a todos; no hay tabla de features ni lectura de `beta_features` para ocultar módulos.
-- Concepto de **bloquear/deshabilitar** usuario (solo existe expulsión).
-- **Aislamiento de datos por agente**: en `main` cualquier miembro ve todos los datos de la cuenta. La RLS de aislamiento existe pero vive en la rama `feature/router-multiasesor` (migración 037), sin mergear.
-- **Reasignación manual** de un lead a otra asesora.
+→ **Se reordena: piso de seguridad primero, valor de la asesora al frente, gating/blocked mínimos y últimos.**
 
-## Alcance
+## Scope
 
-**Dentro (SP1):** roles+alta (reuso), gating de módulos, bloquear/habilitar, aislamiento de datos (graduar Fase 0 del router a main), asignación (automática existente + reasignación manual del admin), UI del admin.
+**Dentro (SP1):** aislamiento de datos completo (RLS en TODAS las tablas + `/api/v1` verificada), el loop de valor de la asesora (mayormente ya existe), gating de módulos + bloquear (mínimos), asignación (auto + reasignación manual), event log sembrado.
+**Fuera:** router/reparto por cupo (SP2), venta de datos (SP3). Migración de planillas y modelo legal/PII: flagueados, no bloquean el piloto con una asesora.
 
-**Fuera:** el router / reparto por cupo fino (`pickByQuota`, página `/r/`, identificación del lead) = SP2. Módulo de venta de datos = SP3 (solo se deja el rol admin preparado, sin construir).
+## Arquitectura por fases (orden = orden de construcción)
 
-## Diseño
+### Fase 1 — Piso de seguridad (NO negociable, primero, antes de cualquier UI)
 
-### 1. Roles y alta — reuso
-Admin = `owner/admin`, Asesor = `agent`. No se agregan roles. El admin invita asesoras con rol `agent` por el flujo de link existente. Al aceptar, la asesora queda `agent` en la cuenta del admin.
+**1.1 Auditar TODAS las tablas con RLS** e inventariar cuáles necesitan aislamiento por agente (no confiar en la lista de 037). Punto de partida a verificar una por una:
+- **Aislar por agente** (agent ve solo lo suyo, admin ve todo): `deals`, `conversations`, `messages`, `contacts`, `leads`, `contact_notes`, `contact_custom_values`, `contact_tags`, `lead_capi_events` (PII + conversiones), `push_subscriptions` (por `user_id`).
+- **Revisar caso por caso:** `custom_fields`, `tags` (catálogos de cuenta — ¿compartidos o por agente?), `quick_messages` (¿compartidos?), `lead_intake_errors`, `lead_sync_runs`, `notifications` (ya por user), `broadcasts`, `automations`, `flows`, `message_templates`, `whatsapp_config`, `api_keys`, `webhook_endpoints`.
+- **Coherencia:** las tablas hijas (`contact_notes`, `contact_custom_values`, `contact_tags`) deben aislar consistente con su padre (`contacts`) — hoy verían la nota pero no el contacto, o al revés.
 
-### 2. Gating de módulos — nuevo
+**1.2 Migración 037 (aislamiento) — EXTENDIDA y escrita fresh en main** (NO cherry-pick). Cubre todas las tablas del inventario 1.1, no solo las 4 originales.
+> **Git:** las 037/038 de `feature/router-multiasesor` NO se cherry-pickean (colisión de número de migración con distinto hash → Supabase explota/duplica al mergear). El SQL es **fuente única en main**; la rama router se rebasa sobre main y descarta sus 037/038. El **código** (`repository.ts`, `lead-alerts.ts`) sí se cherry-pickea o re-aplica.
 
-**Modelo:** default por rol + override por usuario.
+**1.3 Migración 038 — `profiles.is_lead_buyer`** + `listAssignableAgents` filtra `is_lead_buyer` (repository.ts) + fix `lead-alerts.ts` (`profiles.user_id`). Escrita fresh en main.
 
-- Nueva columna `profiles.allowed_modules TEXT[]` (nullable). Slugs de módulos = segmentos de ruta de la nav: `dashboard, inbox, notifications, leads, quick-messages, contacts, pipelines, broadcasts, automations, flows`.
-- **Módulos efectivos de un usuario:**
-  - Admin/owner → **todos** (nunca se gatean).
-  - Agent/viewer → `allowed_modules` si está seteado; si es `NULL` → el default `DEFAULT_ASESOR_MODULES = ['leads']` (constante). Así una asesora nueva ve Leads sin que el admin configure nada.
-- **Excepción:** el perfil propio (Configuración → tab Perfil: cambiar contraseña/avatar) es **siempre accesible** — el gating aplica a los módulos operativos, no a la gestión de la cuenta propia. La ruta `/settings` queda accesible pero sus tabs de configuración de cuenta ya están gateados por rol (`RequireRole`), así que una asesora solo ve/edita su perfil.
-- **Enforcement en 2 capas:**
-  - **Sidebar** (`sidebar.tsx`): filtra `navItems` por los módulos efectivos del usuario (leído de `useAuth`).
-  - **Guard de ruta** (server, en el layout de `(dashboard)`): mapea la ruta actual → slug de módulo; si el usuario no lo tiene permitido → `redirect()` a su primer módulo permitido (o a `/leads`). Esto blinda el acceso por URL directa; la UI sola no alcanza.
+**1.4 Verificar `/api/v1` y TODA ruta de API** — que usen el cliente Supabase del usuario (RLS aplica) y no service-role para datos del agente, o que gateen por rol. Auditar cada handler. **El gating de ruta del frontend NO protege la API.**
 
-**Función pura** `src/lib/auth/modules.ts`: `effectiveModules(role, allowed)`, `canAccessModule(role, allowed, slug)`, `moduleForPath(pathname)`. Testeable con Vitest.
+**1.5 Custom claims en el JWT** (Supabase `access_token` hook): rol + `allowed_modules` + `blocked` viajan en el token, para que el guard server y el sidebar no peguen a la DB en cada request. (Alternativa si el hook complica: `React.cache` por request.)
 
-### 3. Bloquear/habilitar — nuevo
+**Verificación de Fase 1 (gate):** con DOS usuarios reales (un admin, una agente), probar que la agente NO ve datos ajenos ni por UI ni por `fetch('/api/v1/...')` en la consola. Sin este gate verde, NO se avanza a UI.
 
-- Nueva columna `profiles.blocked BOOLEAN NOT NULL DEFAULT false`.
-- **Enforcement:** el layout server de `(dashboard)` (que ya resuelve el profile) chequea `blocked`; si está bloqueada, renderiza una pantalla **"Cuenta suspendida"** (sin datos) en vez del CRM. La RLS sigue protegiendo los datos igual. (El owner nunca puede ser bloqueado.)
-- El admin togglea desde la UI de miembros.
+### Fase 2 — El valor de la asesora (lo que genera adopción)
 
-### 4. Aislamiento de datos — graduar Fase 0 del router a main
+El loop core de la asesora **ya existe**: panel de detalle del lead (form legible) + botón de WhatsApp con **mensaje pre-armado** (mensajes rápidos) + cambiar etapa inline. La pieza de valor de SP1 es **hacer que ese loop sea la experiencia principal de la asesora** (que abrir un lead y responder por WhatsApp sea más rápido que su planilla), no construir algo nuevo. Norte de adopción (fuera de SP1, notado): recordatorios de seguimiento, comisión calculada.
 
-Traer a `main` las piezas **terminadas y probadas** de la Fase 0 (hoy en `feature/router-multiasesor`), por cherry-pick o re-aplicación:
-- **Migración 037** — RLS de aislamiento por `assigned_agent_id`: admin/owner ven todo; agent ve solo sus `deals/conversations/contacts/leads` asignados. (Ya verificada: con un solo perfil cae en la rama admin, cero cambio; el aislamiento entra en juego con el primer agente real — que es justo lo que este proyecto crea.)
-- **Migración 038** — `profiles.is_lead_buyer` + `repository.ts` (`listAssignableAgents` filtra `is_lead_buyer` en vez de rol) + fix de `lead-alerts.ts` (`profiles.user_id`).
+### Fase 3 — Gating y bloquear (admin, mínimos, después del piso)
 
-Numeración: `main` está en 036; 037/038 quedan con esos números (consistentes). **Nota git:** al mergear más adelante la rama `feature/router-multiasesor`, habrá que reconciliar 037/038 ya presentes en main (rebasar la rama sobre main resuelve esto).
+**3.1 Gating de módulos:** `profiles.allowed_modules TEXT[]`. Efectivos: admin/owner=todos; agent=`allowed_modules` o default `['leads']`. Enforcement: sidebar filtra + guard de ruta en el layout server (leyendo el **claim del JWT**, no la DB). Función pura `src/lib/auth/modules.ts` testeable.
+- **UX (del Outsider):** esconder **de verdad** (no mostrar puertas cerradas que generan "no confían en mí"). Nada de módulos visibles-pero-bloqueados.
 
-Resultado: admin ve todo el trabajo; cada asesora ve **solo sus leads asignados**.
+**3.2 Bloquear:** `profiles.blocked BOOLEAN`. Enforcement **real, no solo cosmético**: el guard server bloquea + se **invalida/revoca la sesión** (forzar signOut; la RLS igual protege los datos). Owner nunca bloqueable.
+- **UX:** lenguaje no punitivo (no "suspendido/bloqueado" tipo banco para una asesora que no cometió falta) — algo como "tu acceso está pausado, contactá al admin".
 
-### 5. Asignación — automática + reasignación manual
+**3.3 UI del admin:** Configuración → Miembros, por asesora: checkboxes de módulos + toggle de acceso. Vía **RPCs SECURITY DEFINER (migración 039)** `set_member_modules`, `set_member_blocked` — admin+ only, **con `WHERE account_id` propio** (que una asesora no edite a otra cuenta), no owner, no self para blocked.
 
-- **Automática (existe):** `pickLeastLoaded()` reparte los leads entrantes entre las asesoras marcadas `is_lead_buyer = true` (viene con 038 + el cambio de `repository.ts`). El admin (`is_lead_buyer = false`) queda fuera del reparto. Al invitar una asesora, se la marca `is_lead_buyer = true`.
-- **Reasignación manual (nueva):** el admin puede cambiar `deals.assigned_agent_id` a otra asesora. **UI:** un selector **"Asignada a"** (solo admin) en el header del panel de detalle del lead (`ContactDetailView`, el que ya construimos), que lista las asesoras `is_lead_buyer` de la cuenta y actualiza `assigned_agent_id`. Bajo RLS 037 el admin puede editar cualquier deal.
+### Fase 4 — Event log (sembrar ahora, no mostrar)
 
-### 6. UI del admin — nuevo
+Tabla append-only **`activity_log`** (migración 040): `id, account_id, user_id, deal_id, lead_id, action (stage_change|contacted|note_added|reassigned), meta jsonb, created_at`. Se escribe en las acciones clave (cambio de etapa, click de WhatsApp/contacted, nota, reasignación). **No se muestra en UI en SP1.** Es el insumo del CAPI de calidad y del "ver si actualizan" hecho bien (un log, no vigilancia intrusiva).
 
-- **Configuración → Miembros** (`members-tab.tsx`): por cada miembro `agent`, además del select de rol y el botón de remover, dos controles nuevos (admin+ only):
-  - **Módulos**: multi-select / checkboxes de los módulos disponibles, seteando `allowed_modules`.
-  - **Bloquear/habilitar**: toggle sobre `blocked`.
-- Estas mutaciones tocan filas de OTROS perfiles → como la RLS de `profiles` solo permite editar el propio, van por **RPCs SECURITY DEFINER nuevas** (patrón de las 018): `set_member_modules(p_user_id, p_modules)` y `set_member_blocked(p_user_id, p_blocked)` — admin+ only, no tocan owner ni self para blocked. Rutas API `/api/account/members/[userId]` (PATCH ampliado o sub-rutas).
+## Asignación
+
+Automática `pickLeastLoaded` entre asesoras `is_lead_buyer` (admin excluido) + **reasignación manual** del admin (selector "Asignada a" en el panel de detalle del lead → `deals.assigned_agent_id`). **Edge:** leads `assigned_agent_id NULL` deben ser visibles para el admin (la policy "admin ve todo" lo cubre — verificar).
+
+## Rollout y riesgos (del council — explícitos)
+
+- **Empezar con UNA asesora (Ale, ya adentro), no seis.** Si una no lo elige por gusto, ningún panel de admin lo arregla.
+- **Doble vida / fuente de verdad:** si la asesora sigue en su planilla, el CRM queda con datos vacíos/podridos → envenena el CAPI y las métricas. Falta el mecanismo que fuerce al CRM como única fuente (import del Excel + que el WhatsApp valioso solo exista adentro). Parcialmente producto/SP2 — **flag**, se decide antes de escalar a 6.
+- **Legal / PII:** leads con datos de salud compartidos entre compradoras que compiten; revender PII de un lead no trabajado; qué pasa cuando una asesora se va "con sus leads". **Revisar antes de escalar** (no bloquea el piloto con una asesora que ya opera bajo la cuenta).
+- **Puerta de una sola vía:** las compradoras son el ingreso; un rollout mal hecho daña la relación. Ir de a una, con cuidado.
 
 ## Data model (migraciones)
 
-- **037 / 038** — graduadas desde la rama router (ver §4).
-- **039 (nueva)** — `profiles.allowed_modules TEXT[]` + `profiles.blocked BOOLEAN DEFAULT false` + RPCs `set_member_modules`, `set_member_blocked` (SECURITY DEFINER, admin+, con las mismas guardas que 018: cuenta propia, no owner, no self para blocked).
+| # | Contenido |
+|---|---|
+| 037 | RLS de aislamiento por agente — **EXTENDIDA** a todas las tablas del inventario 1.1. Fresh en main. |
+| 038 | `profiles.is_lead_buyer` + código (repository.ts, lead-alerts.ts). Fresh en main. |
+| 039 | `profiles.allowed_modules` + `profiles.blocked` + RPCs `set_member_modules`/`set_member_blocked` (con `WHERE account_id`, no owner/self). |
+| 040 | `activity_log` append-only. |
+| — | Custom claims: Supabase `access_token` auth hook (config del proyecto). |
 
 ## Manejo de errores y edge cases
 
-- **Asesora sin ningún módulo permitido** (`allowed_modules = '{}'` explícito): el guard la manda a una pantalla "Sin módulos habilitados — hablá con el admin". No loop de redirects.
-- **Admin se auto-gatea/bloquea:** las RPCs rechazan `blocked` sobre self y sobre owner (SQLSTATE → 400). `allowed_modules` no aplica a admin/owner (se ignora), así que auto-gatearse no tiene efecto.
-- **Ruta no mapeada a módulo** (ej. `/leads/sources`, `/settings`): el guard mapea por prefijo (`/leads/*` → `leads`); `/settings` siempre permitido (perfil propio).
-- **Deep-link del push** (`/leads?lead=`) a una asesora que no tiene el lead asignado: RLS 037 no le devuelve el contacto → el panel no abre (silencioso), como ya maneja la vista de detalle.
-- **Bloqueada con sesión activa:** el próximo request pega el layout → pantalla suspendida. Opcional: forzar signOut.
+- Asesora sin módulos (`allowed_modules = '{}'`) → pantalla "sin módulos habilitados, hablá con el admin", sin loop de redirects.
+- Admin auto-gateándose/bloqueándose: RPCs rechazan blocked sobre self/owner; `allowed_modules` no aplica a admin/owner.
+- Ruta no mapeada a módulo (`/leads/sources`, `/settings`) → mapeo por prefijo; `/settings` siempre permitido (perfil propio; sus tabs de config ya gateados por rol).
+- Contacto con dos deals de dos asesoras → ambas lo ven (aceptado; el aislamiento es por deal). Documentar.
+- Blocked con sesión activa → sesión invalidada (Fase 3.2), no solo pantalla.
+- Deep-link del push a lead no asignado → RLS no devuelve la fila, el panel no abre (ya manejado).
 
 ## Testing
 
-- **Unit (Vitest):** `src/lib/auth/modules.ts` — `effectiveModules` (admin=todos, agent con/sin override, default), `canAccessModule`, `moduleForPath` (prefijos, settings siempre, ruta desconocida). Y `src/lib/auth/roles.ts` sigue cubierto.
-- **Manual/Playwright:** (a) invitar una asesora, entra y ve solo Leads; (b) URL directa a `/pipelines` la redirige; (c) admin le agrega Pipelines → aparece; (d) admin la bloquea → pantalla suspendida; (e) la asesora ve solo sus leads asignados, el admin ve todos; (f) el admin reasigna un lead y cambia de dueño.
+- **Unit (Vitest):** `modules.ts` (efectivos, canAccess, moduleForPath). `roles.ts` sigue cubierto.
+- **Integración/manual (el gate crítico):** dos usuarios reales — la agente no accede a datos ajenos por UI **ni por `/api/v1`**. Por tabla del inventario 1.1. Este es el test que decide si el piso está.
+- **Playwright:** invitar asesora → ve solo Leads → URL directa a otro módulo redirige → admin agrega módulo → aparece → admin pausa acceso → sesión cortada → la asesora ve solo sus leads, el admin ve todos → reasignar cambia dueño.
 
 ## Fuera de alcance (a propósito)
 
-- **Router / reparto por cupo** (`pickByQuota`, `/r/[leadId]` con identificación, `lead_router_events`) = SP2, su propia sesión de diseño.
-- **Módulo de venta de datos** = SP3. Solo se deja el rol admin como el que lo administrará; no se construye nada ahora.
-- Cambiar el modelo de login (sigue email+password de Supabase). No se agrega username suelto.
-
-## Archivos afectados (aproximado)
-
-| Archivo | Cambio |
-|---|---|
-| `supabase/migrations/037_*.sql`, `038_*.sql` | **Graduar** desde la rama router |
-| `supabase/migrations/039_member_modules_blocked.sql` | **Crear** — columnas + RPCs |
-| `src/lib/leads/repository.ts` | `listAssignableAgents` → `is_lead_buyer` (de 038) |
-| `src/lib/push/lead-alerts.ts` | fix `user_id` (de 038) |
-| `src/lib/auth/modules.ts` + `.test.ts` | **Crear** — lógica pura de gating |
-| `src/hooks/use-auth.tsx` | Exponer `allowedModules`/`blocked`/módulos efectivos |
-| `src/components/layout/sidebar.tsx` | Filtrar `navItems` por módulos efectivos |
-| `src/app/(dashboard)/layout.tsx` | Guard de ruta + pantalla "suspendida"/"sin módulos" |
-| `src/components/settings/members-tab.tsx` | Controles de módulos + bloquear por miembro |
-| `src/app/api/account/members/[userId]/route.ts` | PATCH ampliado (módulos, blocked) → RPCs |
-| `src/components/contacts/contact-detail-view.tsx` | Selector "Asignada a" (admin) |
-| `src/lib/auth/roles.ts` | (opcional) predicado `canAssignLeads` / helpers |
+- Router / reparto por cupo (`pickByQuota`, `/r/[leadId]` con identificación, `lead_router_events`) = SP2.
+- Módulo de venta de datos = SP3 (solo se deja el rol admin preparado).
+- Import de planillas y modelo legal/PII completo = flagueados, se resuelven antes de escalar a 6 asesoras.
+- Cambiar el login (sigue email+password Supabase; alta por `inviteUserByEmail`/`generateLink('invite')` que crea el user confirmado sin fricción, seteando `is_lead_buyer`/`allowed_modules` en el trigger de creación de profile).
