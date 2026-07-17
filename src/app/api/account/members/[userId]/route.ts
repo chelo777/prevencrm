@@ -58,7 +58,14 @@ export async function PATCH(
     const { userId } = await params;
 
     const body = (await request.json().catch(() => null)) as
-      | { role?: unknown; allowed_modules?: unknown; blocked?: unknown }
+      | {
+          role?: unknown;
+          allowed_modules?: unknown;
+          blocked?: unknown;
+          receiving?: unknown;
+          lead_cap?: unknown;
+          reset_cycle?: unknown;
+        }
       | null;
 
     // Configurar los módulos visibles de un miembro (agent). null = default.
@@ -92,6 +99,48 @@ export async function PATCH(
       const { error } = await ctx.supabase.rpc("set_member_blocked", {
         p_user_id: userId,
         p_blocked: body.blocked,
+      });
+      if (error) return rpcErrorToResponse(error);
+      return NextResponse.json({ ok: true });
+    }
+
+    // Activar / pausar la recepción de leads del pozo común.
+    if (body && "receiving" in body) {
+      if (typeof body.receiving !== "boolean") {
+        return NextResponse.json(
+          { error: "'receiving' debe ser boolean" },
+          { status: 400 },
+        );
+      }
+      const { error } = await ctx.supabase.rpc("set_member_receiving", {
+        p_user_id: userId,
+        p_receiving: body.receiving,
+      });
+      if (error) return rpcErrorToResponse(error);
+      return NextResponse.json({ ok: true });
+    }
+
+    // Configurar el cupo de leads del miembro (null = sin límite).
+    if (body && "lead_cap" in body) {
+      const cap = body.lead_cap;
+      if (cap !== null && (typeof cap !== "number" || cap < 0)) {
+        return NextResponse.json(
+          { error: "'lead_cap' debe ser número ≥ 0 o null" },
+          { status: 400 },
+        );
+      }
+      const { error } = await ctx.supabase.rpc("set_member_cap", {
+        p_user_id: userId,
+        p_cap: cap,
+      });
+      if (error) return rpcErrorToResponse(error);
+      return NextResponse.json({ ok: true });
+    }
+
+    // Reiniciar la tanda de recepción (mueve receiving_since a ahora).
+    if (body && body.reset_cycle === true) {
+      const { error } = await ctx.supabase.rpc("reset_member_cycle", {
+        p_user_id: userId,
       });
       if (error) return rpcErrorToResponse(error);
       return NextResponse.json({ ok: true });
