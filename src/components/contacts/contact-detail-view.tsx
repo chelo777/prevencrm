@@ -56,6 +56,15 @@ interface StageOption {
   color: string;
 }
 
+// Capitas (VBO): entero 1–20. Vale para el input local y como requisito
+// para mover un deal a "Calificado" (el CAPI manda custom_data.value con
+// este número; si es null, Task 6 omite el value).
+function isValidCapitas(raw: string): boolean {
+  if (!raw.trim()) return false;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 20;
+}
+
 export function ContactDetailView({
   open,
   onOpenChange,
@@ -113,6 +122,11 @@ export function ContactDetailView({
     { user_id: string; full_name: string | null }[]
   >([]);
   const [assignedAgentId, setAssignedAgentId] = useState('');
+
+  // Capitas (VBO) — requisito para mover el deal a "Calificado" (Task 9).
+  const [capitas, setCapitas] = useState<string>('');
+  const [savingCapitas, setSavingCapitas] = useState(false);
+  const [capitasWarning, setCapitasWarning] = useState(false);
 
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
@@ -190,7 +204,7 @@ export function ContactDetailView({
     setLoadingDeals(true);
     const { data } = await supabase
       .from('deals')
-      .select('*, stage:pipeline_stages(*)')
+      .select('*, capitas, stage:pipeline_stages(*)')
       .eq('contact_id', contactId)
       .order('created_at', { ascending: false });
     setDeals((data ?? []) as Deal[]);
@@ -198,6 +212,9 @@ export function ContactDetailView({
     if (first) {
       setHeaderStageId(first.stage_id as string);
       setAssignedAgentId((first.assigned_agent_id as string | null) ?? '');
+      const rawCapitas = (first.capitas as number | null) ?? null;
+      setCapitas(rawCapitas != null ? String(rawCapitas) : '');
+      setCapitasWarning(false);
     }
     setLoadingDeals(false);
   }, [contactId, supabase]);
@@ -272,6 +289,21 @@ export function ContactDetailView({
   async function changeStage(nextStageId: string) {
     const primary = deals[0];
     if (!primary || !nextStageId || nextStageId === headerStageId) return;
+
+    // Gate: mover a "Calificado" requiere capitas válida (1–20). El CAPI
+    // (Task 6) manda custom_data.value=capitas al llegar a esa etapa y el
+    // cron sella el evento en el primer envío, así que tiene que estar
+    // cargada ANTES del movimiento. Nada de window.prompt — bloqueo con
+    // toast + aviso inline sobre el input de capitas.
+    const targetStage = stages.find((s) => s.id === nextStageId);
+    if (targetStage?.name === 'Calificado' && !isValidCapitas(capitas)) {
+      toast.error('Cargá las capitas antes de calificar', {
+        description: 'Ingresá un número entero de 1 a 20 en "Capitas" (tab Deals) y guardá.',
+      });
+      setCapitasWarning(true);
+      return;
+    }
+
     const prev = headerStageId;
     setHeaderStageId(nextStageId); // optimista
     const { error } = await supabase
@@ -282,10 +314,34 @@ export function ContactDetailView({
       setHeaderStageId(prev);
       toast.error('No se pudo cambiar la etapa');
     } else {
+      setCapitasWarning(false);
       logActivity('stage_change', primary.id, { stage_id: nextStageId });
       fetchDeals(); // mantiene la tab Deals en sync
       onUpdated();
     }
+  }
+
+  // Guarda capitas validadas (entero 1–20) sobre el deal principal.
+  async function saveCapitas() {
+    const primary = deals[0];
+    if (!primary) return;
+    if (!isValidCapitas(capitas)) {
+      toast.error('Capitas debe ser un número entero de 1 a 20');
+      return;
+    }
+    setSavingCapitas(true);
+    const { error } = await supabase
+      .from('deals')
+      .update({ capitas: Number(capitas) })
+      .eq('id', primary.id);
+    if (error) {
+      toast.error('No se pudieron guardar las capitas');
+    } else {
+      toast.success('Capitas guardadas');
+      setCapitasWarning(false);
+      fetchDeals();
+    }
+    setSavingCapitas(false);
   }
 
   // Reasignar el deal a otra asesora (admin). Actualiza assigned_agent_id
@@ -934,6 +990,54 @@ export function ContactDetailView({
                   <p className="text-xs text-muted-foreground">Todavía no hay deals</p>
                 ) : (
                   <div className="space-y-2">
+                    <div
+                      className={`rounded-lg border p-3 ${
+                        capitasWarning
+                          ? 'border-red-400 bg-red-400/5'
+                          : 'border-border bg-muted/50'
+                      }`}
+                    >
+                      <Label
+                        htmlFor="deal-capitas"
+                        className="text-muted-foreground text-xs"
+                      >
+                        Capitas
+                      </Label>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <Input
+                          id="deal-capitas"
+                          type="number"
+                          min={1}
+                          max={20}
+                          step={1}
+                          value={capitas}
+                          onChange={(e) => {
+                            setCapitas(e.target.value);
+                            setCapitasWarning(false);
+                          }}
+                          placeholder="1–20"
+                          className="bg-muted border-border text-foreground h-8 w-24 text-sm"
+                        />
+                        <Button
+                          onClick={saveCapitas}
+                          disabled={savingCapitas}
+                          size="sm"
+                          className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                        >
+                          {savingCapitas ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <Save className="size-3.5" />
+                          )}
+                          Guardar
+                        </Button>
+                      </div>
+                      {capitasWarning && (
+                        <p className="mt-1.5 text-xs text-red-400">
+                          Cargá un número entero de 1 a 20 para poder calificar este lead.
+                        </p>
+                      )}
+                    </div>
                     {deals.map((deal) => (
                       <div
                         key={deal.id}

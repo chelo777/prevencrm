@@ -34,6 +34,16 @@ export function StageSelect({
   async function onChange(next: string) {
     const prev = stageId;
     if (!next || next === prev) return;
+
+    // "Calificado" requiere capitas cargadas (VBO para el CAPI) y acá, en
+    // la tabla, no hay dónde cargarlas — se bloquea y se manda al lead a
+    // abrir el detalle. Nunca window.prompt.
+    const targetStage = stages.find((s) => s.id === next);
+    if (targetStage?.name === "Calificado") {
+      toast.error("Abrí el lead y cargá las capitas para calificar");
+      return;
+    }
+
     setStageId(next);
     setBusy(true);
     const supabase = createClient();
