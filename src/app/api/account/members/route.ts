@@ -70,35 +70,42 @@ export async function GET() {
 
     const profileRows = data as ProfileRow[];
 
+    const canSeeEmails = canManageMembers(ctx.role);
+
     // "Recibidos en la tanda" es derivado de activity_log (lead_assigned −
     // lead_reclaimed desde receiving_since de cada miembro), no una columna
-    // mutable. Una sola query trae todo el historial relevante de la cuenta
-    // y se agrega en memoria por user_id — pocos miembros por cuenta, así
-    // que esto evita N+1 sin necesitar un `since` distinto por fila.
-    const { data: activityRows, error: activityError } = await ctx.supabase
-      .from("activity_log")
-      .select("user_id, action, created_at")
-      .eq("account_id", ctx.accountId)
-      .in("action", ["lead_assigned", "lead_reclaimed"]);
+    // mutable. Esta información es confidencial (admin-only): un no-admin no
+    // debería ver la carga de sus compañeros. Solo en admin, una sola query
+    // trae todo el historial relevante de la cuenta y se agrega en memoria
+    // por user_id — pocos miembros por cuenta, así que esto evita N+1 sin
+    // necesitar un `since` distinto por fila.
+    let activityByUser = new Map<string, ActivityLogRow[]>();
 
-    if (activityError) {
-      console.error(
-        "[GET /api/account/members] activity_log fetch error:",
-        activityError,
-      );
-      return NextResponse.json(
-        { error: "Failed to load members" },
-        { status: 500 },
-      );
-    }
+    if (canSeeEmails) {
+      const { data: activityRows, error: activityError } = await ctx.supabase
+        .from("activity_log")
+        .select("user_id, action, created_at")
+        .eq("account_id", ctx.accountId)
+        .in("action", ["lead_assigned", "lead_reclaimed"]);
 
-    const activityByUser = new Map<string, ActivityLogRow[]>();
-    for (const row of activityRows as ActivityLogRow[]) {
-      const list = activityByUser.get(row.user_id);
-      if (list) {
-        list.push(row);
-      } else {
-        activityByUser.set(row.user_id, [row]);
+      if (activityError) {
+        console.error(
+          "[GET /api/account/members] activity_log fetch error:",
+          activityError,
+        );
+        return NextResponse.json(
+          { error: "Failed to load members" },
+          { status: 500 },
+        );
+      }
+
+      for (const row of activityRows as ActivityLogRow[]) {
+        const list = activityByUser.get(row.user_id);
+        if (list) {
+          list.push(row);
+        } else {
+          activityByUser.set(row.user_id, [row]);
+        }
       }
     }
 
@@ -117,10 +124,8 @@ export async function GET() {
         if (row.action === "lead_assigned") assigned += 1;
         else if (row.action === "lead_reclaimed") reclaimed += 1;
       }
-      return assigned - reclaimed;
+      return Math.max(0, assigned - reclaimed);
     }
-
-    const canSeeEmails = canManageMembers(ctx.role);
 
     const members: MemberOut[] = profileRows.flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
