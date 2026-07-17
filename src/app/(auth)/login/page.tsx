@@ -141,19 +141,20 @@ function LoginPageInner() {
             </Button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-muted-foreground">
-            ¿No tenés cuenta?{" "}
-            <Link
-              href={
-                inviteToken
-                  ? `/signup?invite=${encodeURIComponent(inviteToken)}`
-                  : "/signup"
-              }
-              className="text-primary hover:text-primary/80"
-            >
-              Crear cuenta
-            </Link>
-          </p>
+          {/* Alta solo por invitación: el enlace a registro aparece
+              únicamente cuando se llega con un token de invitación. Sin
+              token no hay auto-registro público. */}
+          {inviteToken && (
+            <p className="mt-6 text-center text-sm text-muted-foreground">
+              ¿No tenés cuenta?{" "}
+              <Link
+                href={`/signup?invite=${encodeURIComponent(inviteToken)}`}
+                className="text-primary hover:text-primary/80"
+              >
+                Crear cuenta
+              </Link>
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

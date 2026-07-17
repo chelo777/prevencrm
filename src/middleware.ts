@@ -69,6 +69,23 @@ export async function middleware(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
+  // Invite-only signup. An anonymous visitor can reach /signup ONLY
+  // with an invitation token in the query string. Without it there is
+  // no public self-registration — we send them to /login. This closes
+  // the "anyone with the URL creates an account" door. (The token is
+  // validated for real when they redeem at /join/<token>; here we just
+  // gate the door — a bogus token still only ever yields an isolated,
+  // empty account with zero access to any other tenant's data.)
+  if (!user && request.nextUrl.pathname === '/signup') {
+    const inviteToken = request.nextUrl.searchParams.get('invite')
+    if (!inviteToken) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      url.search = ''
+      return withRefreshedCookies(NextResponse.redirect(url))
+    }
+  }
+
   // Protected pages - redirect to login if not authenticated
   const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
