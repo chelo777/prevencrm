@@ -19,11 +19,17 @@ import {
 } from "@/lib/leads/meta-api";
 import { ingestLead } from "@/lib/leads/ingest";
 import { reconcileAllCapi } from "@/lib/leads/capi";
+import { reclaimStaleLeads } from "@/lib/leads/reclaim";
 import { notifyNewLeads } from "@/lib/push/lead-alerts";
 
 // Node runtime: usamos node:crypto (JWT de Google + SHA-256 de CAPI).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// Reclamo: solo sobre leads creados desde que el feature está vivo (excluye el
+// backlog histórico). Actualizar a la fecha real de deploy.
+const RECLAIM_AFTER_ISO = "2026-07-18T00:00:00Z";
+const RECLAIM_DRY_RUN = true; // ⚠️ arrancar en true; pasar a false tras revisar logs.
 
 /**
  * Cron de ingesta de leads de Meta (Fase 1 = Google Sheets) + feedback
@@ -114,6 +120,14 @@ export async function GET(request: Request) {
           console.error("[leads/sync] error en fila:", rowErr);
         }
       }
+
+      const reclaim = await reclaimStaleLeads(repo, {
+        reclaimAfterIso: RECLAIM_AFTER_ISO,
+        dryRun: RECLAIM_DRY_RUN,
+      });
+      console.log(
+        `[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} reassigned=${reclaim.reassigned} (dryRun=${RECLAIM_DRY_RUN})`,
+      );
     } catch (srcErr) {
       totals.ok = false;
       totals.message =
@@ -203,6 +217,14 @@ export async function GET(request: Request) {
           after = batch.after;
         }
       }
+
+      const reclaim = await reclaimStaleLeads(repo, {
+        reclaimAfterIso: RECLAIM_AFTER_ISO,
+        dryRun: RECLAIM_DRY_RUN,
+      });
+      console.log(
+        `[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} reassigned=${reclaim.reassigned} (dryRun=${RECLAIM_DRY_RUN})`,
+      );
     } catch (srcErr) {
       totals.ok = false;
       totals.message = srcErr instanceof Error ? srcErr.message : String(srcErr);
