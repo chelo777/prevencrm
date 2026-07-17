@@ -73,6 +73,9 @@ export interface SendConversionInput {
   /** meta_lead_id del lead (acepta prefijo "l:"). Obligatorio para la
    *  optimización Conversion Leads: ata el evento al lead/anuncio exacto. */
   leadId?: string | null;
+  /** VBO: capitas del deal. Si es null/undefined, NO se manda custom_data
+   *  (nunca se sella un value=1 basura). */
+  value?: number | null;
 }
 
 /** Payload del evento (puro, testeable). */
@@ -89,17 +92,15 @@ export function buildEventPayload(input: SendConversionInput): {
       user_data.lead_id = Number.isSafeInteger(n) ? n : numeric;
     }
   }
-  return {
-    data: [
-      {
-        event_name: input.eventName,
-        event_time: input.eventTimeSec,
-        event_id: input.eventId, // dedup server-side
-        action_source: "system_generated",
-        user_data,
-      },
-    ],
+  const event: Record<string, unknown> = {
+    event_name: input.eventName,
+    event_time: input.eventTimeSec,
+    event_id: input.eventId, // dedup server-side
+    action_source: "system_generated",
+    user_data,
   };
+  if (input.value != null) event.custom_data = { value: input.value, currency: "ARS" };
+  return { data: [event] };
 }
 
 export interface SendConversionResult {
@@ -148,6 +149,7 @@ interface CapiConfigRow {
   trigger_stage_name: string;
   event_name: string;
   active: boolean;
+  send_value: boolean;
 }
 
 /**
@@ -182,11 +184,14 @@ export async function reconcileCapiForAccount(
   // Deals que ya están en la etapa disparadora.
   const { data: deals } = await admin
     .from("deals")
-    .select("id")
+    .select("id, capitas")
     .eq("account_id", config.account_id)
     .in("stage_id", stageIds);
   const dealIds = (deals ?? []).map((d) => d.id as string);
   if (dealIds.length === 0) return totals;
+  const capitasByDeal = new Map<string, number | null>(
+    (deals ?? []).map((d) => [d.id as string, (d.capitas as number | null) ?? null]),
+  );
 
   // Leads de esos deals.
   const { data: leads } = await admin
@@ -254,6 +259,9 @@ export async function reconcileCapiForAccount(
       eventTimeSec: Math.floor(Date.now() / 1000),
       userData: buildUserData(capiContact),
       leadId: (lead.meta_lead_id as string | null) ?? null,
+      // Solo eventos de valor (send_value) Y con capitas cargadas. Si null,
+      // NO se manda value (nunca se sella value=1 basura).
+      value: config.send_value ? (capitasByDeal.get(lead.deal_id as string) ?? null) : null,
     });
 
     await admin
@@ -287,7 +295,7 @@ export async function reconcileAllCapi(
 
   const { data: configs } = await admin
     .from("lead_capi_config")
-    .select("account_id, dataset_id, trigger_stage_name, event_name, active")
+    .select("account_id, dataset_id, trigger_stage_name, event_name, active, send_value")
     .eq("active", true);
 
   for (const config of (configs ?? []) as CapiConfigRow[]) {
