@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Council — Auditoría de roles/RBAC prevencrm</title>
+<style>
+  :root { --bg:#fbfbfa; --card:#fff; --ink:#1a1a1a; --mut:#666; --line:#e6e6e3;
+          --crit:#c0392b; --alto:#d68910; --ok:#1e8449; --accent:#5b4bd6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         line-height:1.55; }
+  .wrap { max-width:860px; margin:0 auto; padding:40px 22px 80px; }
+  h1 { font-size:1.6rem; margin:0 0 6px; }
+  h2 { font-size:1.2rem; margin:34px 0 12px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  .sub { color:var(--mut); font-size:.92rem; margin-bottom:22px; }
+  .q { background:#f0eefb; border:1px solid #ddd8f5; border-radius:10px; padding:14px 18px; font-size:.95rem; }
+  .verdict { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:6px 22px 18px;
+             box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  .verdict h3 { font-size:1.02rem; margin:20px 0 8px; }
+  .rec { background:#eafaf1; border:1px solid #c8ebd6; border-radius:10px; padding:6px 18px 14px; }
+  .first { background:#fdecea; border:1px solid #f5c6c1; border-radius:10px; padding:14px 18px; font-weight:500; }
+  ul { margin:8px 0; padding-left:20px; } li { margin:5px 0; }
+  code { background:#f2f2ef; padding:1px 5px; border-radius:4px; font-size:.86em; }
+  table { border-collapse:collapse; width:100%; font-size:.9rem; margin:10px 0; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mut); font-weight:600; }
+  .tag { display:inline-block; font-size:.72rem; font-weight:700; padding:2px 8px; border-radius:20px; color:#fff; }
+  .t-crit{background:var(--crit)} .t-alto{background:var(--alto)} .t-med{background:#7f8c8d} .t-ok{background:var(--ok)}
+  .grid { display:grid; grid-template-columns:1fr; gap:10px; margin:12px 0; }
+  .adv { border:1px solid var(--line); border-radius:10px; background:var(--card); padding:2px 16px; }
+  .adv summary { cursor:pointer; font-weight:600; padding:12px 0; list-style:none; }
+  .adv summary::-webkit-details-marker{display:none}
+  .adv summary::before{content:"▸ "; color:var(--accent)}
+  .adv[open] summary::before{content:"▾ "}
+  .lens { font-size:.8rem; color:var(--mut); font-weight:400; }
+  .align td:first-child{font-weight:600}
+  .foot { color:var(--mut); font-size:.82rem; margin-top:40px; border-top:1px solid var(--line); padding-top:14px; }
+  .pos{color:var(--ok);font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Council — Auditoría de roles / RBAC de prevencrm</h1>
+  <div class="sub">5 asesores independientes + revisión por pares + síntesis del chairman · 2026-07-17</div>
+
+  <div class="q">
+    <strong>La pregunta:</strong> Dada la auditoría de roles/RBAC (CRM que vende leads <em>exclusivos de salud</em> a asesoras-compradoras), ¿qué priorizar y en qué orden? ¿La filosofía "RLS es el muro, los módulos son UX" es sólida o hay que endurecer server-side? ¿Se sobre-ingenieriza o falta base? ¿Cuál es el riesgo mayor que el negocio no ve? ¿Y la posible regresión de envío de WhatsApp?
+  </div>
+
+  <h2>Veredicto del Chairman</h2>
+  <div class="verdict">
+    <h3>Donde el consejo coincide (señales de alta confianza)</h3>
+    <ul>
+      <li><strong>La fuga de PII de salud entre asesoras (<code>lead_intake_errors.raw_row</code>) es lo #1.</strong> Rompe la promesa central —exclusividad— y es exposición legal (datos de salud = categoría especial, Ley 25.326). 4 de 5 la ponen primera o co-primera.</li>
+      <li><strong>"RLS es el muro, módulos son UX" es una media verdad peligrosa (unánime).</strong> RLS protege <em>filas</em>, no <em>roles</em>, <em>columnas</em> ni rutas <em>service-role</em>. El núcleo es correcto (el enforcement va server-side, no en un <code>useEffect</code>); el <em>alcance</em> es falso: creyeron que RLS cubría toda la superficie de datos y no lo hace. Los tres ALTOS son exactamente los huecos que RLS no puede cubrir.</li>
+      <li><strong>No es sobre-ingeniería: falta base.</strong> Los arreglos son lo más barato que existe — <code>requireRole()</code> server-side en cada ruta service-role.</li>
+      <li><strong>El riesgo que el negocio no ve:</strong> una sola asesora del piloto descubriendo por accidente que ve datos (o salud) de otra <em>refuta la propuesta de valor entera</em> y destruye lo único que no se recompra: la confianza. En un negocio de exclusividad, la fuga no es un bug — es la prueba de que el producto es un fraude.</li>
+      <li><strong>WhatsApp: no relajar el endurecimiento.</strong> La regresión delata que se mezcla "leer credenciales" (admin) con "capacidad de operar/enviar" (agent). Se arregla <em>separándolos</em>: un endpoint server acotado que usa la credencial del lado servidor; la asesora nunca la lee. Probar en vivo con una asesora real antes de aplicar.</li>
+    </ul>
+
+    <h3>Donde el consejo choca</h3>
+    <ul>
+      <li><strong>Orden de los dos críticos.</strong> El <em>Ejecutor</em> pone <code>blocked</code> primero (único explotable HOY por alguien ya-dentro, y fix de 20 min). Los otros cuatro ponen la fuga de PII primera (rompe el producto + peso legal). <em>Resolución del chairman:</em> van en el mismo push (migración 041, con horas de diferencia). Si hay que elegir el <em>primer commit</em>, gana la fuga de PII: es la que <strong>no se puede deshacer</strong> si un comprador la descubre.</li>
+      <li><strong>Deuda de seguridad vs oportunidad de producto.</strong> El <em>Expansionista</em> reencuadra todo como el producto en sí (exclusividad certificada como foso, subir precio, log de "quién tocó este lead", compliance como diferenciador). Los otros cuatro lo tratan como contención — y los revisores marcaron esto como el mayor punto ciego: subordinar una fuga <em>activa</em> de PII al pitch es imprudente. <em>Resolución:</em> el Expansionista tiene razón en el largo plazo (el aislamiento verificable ES un diferenciador) pero se equivoca en la secuencia — no podés vender "exclusividad certificada" mientras todavía filtra. Guardá esa carta para <em>después</em> de contener.</li>
+    </ul>
+
+    <h3>Puntos ciegos que cazó la revisión por pares</h3>
+    <ul>
+      <li><strong>El dato YA expuesto.</strong> Los cinco arreglan el futuro; ninguno pregunta si la fuga <em>ya ocurrió</em>. Con el piloto solo-Ale el blast radius es bajo hoy, pero: ¿purgar el histórico de <code>raw_row</code>? ¿hay logs para saber quién vio qué? ¿a quién notificar bajo la 25.326? "Lo cerramos server-side" no responde la pregunta legal.</li>
+      <li><strong>Minimización de datos.</strong> No guardar respuestas de salud crudas en una tabla de cuarentena — redactar/tokenizar en la ingesta, para que la próxima falla de RLS no exponga nada.</li>
+      <li><strong>Tests de regresión automáticos.</strong> Un test de CI que falle si una ruta service-role omite <code>requireRole</code> (+ tests de RLS), para que estos huecos no se reabran en la próxima migración.</li>
+    </ul>
+
+    <h3>La recomendación</h3>
+    <div class="rec">
+      <p>Tratar esto como un <strong>sprint de contención de seguridad, NO de producto</strong>. En este orden, casi todo en una migración (041) + unos edits de rutas, esta semana:</p>
+      <ol>
+        <li><strong>Cerrar las dos fugas de datos primero (mismo push):</strong> (a) restringir <code>lead_intake_errors.raw_row</code> SELECT a admin (o aislar por asignación) + purgar/redactar lo existente; (b) enforce <code>blocked</code> server-side en <code>getCurrentAccount</code> + revocar sesión al bloquear.</li>
+        <li><strong><code>requireRole('agent')</code> en toda ruta service-role</strong> (automations/flows) — el arreglo más mecánico; el muro que RLS no da.</li>
+        <li><strong>Proteger <code>raw_payload</code></strong> (vista sin la columna para agent, o mover a tabla admin-only).</li>
+        <li><strong>Separar "enviar WhatsApp" de "leer config"</strong> — capacidad server acotada — y verificar en vivo que el agent aún envía.</li>
+        <li><strong>Guardar para después:</strong> minimización en ingesta, log de auditoría "quién tocó este lead" (que además es la carta comercial del Expansionista), test de CI de regresión, y el chequeo de alcance de brecha.</li>
+      </ol>
+      <p>Dejar el gating de módulos / UI de Settings como UX (al final o aceptarlo como UX) — el consejo coincide en que no son el muro.</p>
+      <p><strong>Filosofía corregida:</strong> <em>"Ningún dato sensible sale sin autorización server-side — RLS donde alcanza, <code>requireRole</code> explícito en toda ruta service-role."</em></p>
+    </div>
+
+    <h3>La única cosa que hacer primero</h3>
+    <div class="first">
+      Escribir la migración 041 que restringe <code>lead_intake_errors.raw_row</code> (y <code>leads.raw_payload</code>) a admin <strong>y purga/redacta</strong> los datos de salud que ya están en cuarentena — la única fuga que es un incidente notificable y que refuta tu producto si un comprador la encuentra. Todo lo demás puede seguir el mismo día.
+    </div>
+  </div>
+
+  <h2>Mapa de alineación</h2>
+  <table class="align">
+    <tr><th>Tema</th><th>Contrarian</th><th>1º Principios</th><th>Expansionista</th><th>Outsider</th><th>Ejecutor</th></tr>
+    <tr><td>Fuga PII #1</td><td>Sí</td><td>Sí</td><td>Sí</td><td>Sí</td><td>2º (blocked 1º)</td></tr>
+    <tr><td>"RLS=muro" es media verdad</td><td>Sí</td><td>Sí</td><td>Sí (cimiento)</td><td>Sí</td><td>Sí</td></tr>
+    <tr><td>Falta base (no sobre-ing.)</td><td>Sí</td><td>Sí</td><td>—</td><td>Sí</td><td>Sí</td></tr>
+    <tr><td>WhatsApp: separar cred/envío</td><td>Sí</td><td>Sí</td><td>Sí</td><td>Sí</td><td>Sí (o test vivo)</td></tr>
+    <tr><td>Enfoque</td><td>Riesgo</td><td>Reencuadre</td><td>Oportunidad</td><td>Ojos frescos/legal</td><td>Ejecución</td></tr>
+  </table>
+
+  <h2>Hallazgos de la auditoría (base de la discusión)</h2>
+  <table>
+    <tr><th>#</th><th>Sev</th><th>Hallazgo</th></tr>
+    <tr><td>1</td><td><span class="tag t-crit">CRÍTICO</span></td><td><code>blocked</code> cosmético en API: asesora pausada sigue mutando por curl; admin bloqueado conserva poder.</td></tr>
+    <tr><td>2</td><td><span class="tag t-crit">CRÍTICO</span></td><td><code>lead_intake_errors.raw_row</code>: PII de salud cruda legible por toda asesora.</td></tr>
+    <tr><td>3</td><td><span class="tag t-alto">ALTO</span></td><td>automations/flows con service-role sin <code>requireRole</code> → viewer edita/borra ajenos.</td></tr>
+    <tr><td>4</td><td><span class="tag t-alto">ALTO</span></td><td><code>leads.raw_payload</code> (salud) sin protección de columna.</td></tr>
+    <tr><td>5</td><td><span class="tag t-alto">ALTO</span></td><td>Gating de módulos solo cliente (useEffect), sin enforcement server.</td></tr>
+    <tr><td>6</td><td><span class="tag t-med">MEDIO</span></td><td>Settings sin gate de rol + 5 acciones admin en módulos + side-effects Meta + admins entre sí.</td></tr>
+    <tr><td>—</td><td><span class="tag t-med">REGR.</span></td><td>Endurecer whatsapp_config podría impedir que un agent envíe WhatsApp.</td></tr>
+  </table>
+  <p><span class="pos">Positivos confirmados:</span> aislamiento de datos de lead correcto y verificado en vivo; miembros cross-tenant sólido; sin escalada a owner; <code>/leads/sources</code> blindado.</p>
+
+  <h2>Respuestas completas de los asesores</h2>
+  <div class="grid">
+    <details class="adv"><summary>El Contrarian <span class="lens">— busca la falla fatal</span></summary>
+    <p>CRÍTICO 2 es tu bomba, y lo subestimás al ponerlo segundo. Una asesora que PAGA por exclusividad y descubre que puede leer nombres, teléfonos y datos de SALUD de sus competidoras no te reporta un bug: te funde el producto. Con datos de salud (Ley 25.326) es exposición legal real. Prioridad 1, hoy.</p>
+    <p>"RLS es el muro, módulos son UX" es una media verdad peligrosa. RLS protege FILAS. No protege ROLES, ni COLUMNAS, ni rutas service-role. Tus tres ALTOS son exactamente los huecos que RLS estructuralmente NO cubre. No sobre-ingenierizás; te falta la base más barata que existe.</p>
+    <p>CRÍTICO 1 es lo que el negocio no ve: el día que necesites cortarle el acceso a una asesora vas a creer que la cortaste desde la UI, y ella va a seguir mutando por curl. Orden: (1) aislar <code>lead_intake_errors</code>; (2) <code>blocked</code> en /api + revocar sesión; (3) <code>requireRole()</code> en automations/flows/broadcasts; (4) <code>raw_payload</code>.</p>
+    <p>WhatsApp: la regresión te delata. Que endurecer un SELECT rompa un flujo de envío significa que ya mezclás config-de-admin con capacidad-de-operar. No relajes: separá "leer credenciales" de "disparar envío" con una función server acotada.</p>
+    </details>
+
+    <details class="adv"><summary>El Pensador de Primeros Principios <span class="lens">— ¿cuál es la pregunta real?</span></summary>
+    <p>La pregunta que importa no es "¿qué bug parcheo?" sino: <strong>¿cuál es el producto que vendés?</strong> No vendés software. Vendés una promesa: "este lead es tuyo y de nadie más, y su dato de salud está a salvo". Cada CRÍTICO viola esa promesa.</p>
+    <p>"RLS es el muro" es media verdad. RLS aísla <em>filas de una tabla protegida</em>; es el muro de UNA habitación. Tenés dos habitaciones sin puerta: <code>raw_row</code> y todo endpoint con service-role. La regla correcta: <strong>ningún dato sensible sale sin pasar por una autorización server-side</strong>, sea RLS o un <code>requireRole</code> explícito en cada ruta service-role.</p>
+    <p>Ordená por "¿rompe la promesa vendida?": 1) CRÍTICO 2; 2) CRÍTICO 1 + <code>raw_payload</code>; 3) los service-role. El resto (Settings, gating) es UX: dejalo.</p>
+    <p>El riesgo que no ves: una sola asesora del piloto descubriendo que ve datos de otra destruye la confianza — lo único que no se recompra. WhatsApp: no es regresión, es diseño mal planteado. Separá <em>credencial</em> (admin) de <em>capacidad de enviar</em> (endpoint server-side, la asesora nunca la lee).</p>
+    </details>
+
+    <details class="adv"><summary>El Expansionista <span class="lens">— el upside escondido</span></summary>
+    <p>La oportunidad escondida no es defensiva, es tu producto entero. Vendés "leads exclusivos de salud" pero la exclusividad hoy es una PROMESA verbal. CRÍTICO 2 y el ALTO de columnas prueban que tu diferenciador central no está construido. Al cerrarlo server-side no arreglás un hueco: fabricás tu argumento de venta — "exclusividad garantizada por arquitectura, no por mi palabra". Eso justifica subir el precio.</p>
+    <p>Prioridad: CRÍTICO 1 y 2 primero, son literalmente "la cosa que cobrás". Comunicalo: "cada lead sellado, aislado a nivel base, auditable". El aislamiento verificable es marketing. El salto real es hacerlo VISIBLE: un log de "quién tocó este lead" que la asesora pueda ver.</p>
+    <p>Compliance de datos de salud como foso: te abre prepagas más grandes, brokers, y eventualmente vender la plataforma multi-tenant a otros vendedores de leads. WhatsApp: no lo endurezcas hasta romperlo — es el hilo de adopción; envolvé el envío como capacidad explícita del rol agent. No estás asegurando un CRM: estás construyendo el "Privyr de leads de salud con exclusividad certificada".</p>
+    </details>
+
+    <details class="adv"><summary>El Outsider <span class="lens">— ojos frescos, sin contexto</span></summary>
+    <p>¿Por qué esta app almacena "respuestas de salud crudas" en una tabla de cuarentena que todas ven? Los datos de salud son la categoría más regulada que existe. Eso no es un bug de permisos, es un incendio legal.</p>
+    <p>(1) Arreglá PRIMERO la cuarentena. Los demás son puertas mal cerradas; esta ya está abierta. (2) La filosofía es medio verdadera y peligrosamente incompleta: ustedes mismos listan cuatro agujeros DONDE EL MURO NO EXISTE. Predican RLS pero no lo tienen puesto. (3) Les falta lo básico, no están complicándola: son permisos que no se chequean en el servidor.</p>
+    <p>(4) El riesgo que no ven: estas personas PAGAN por "leads exclusivos" y por diseño pueden ver los del resto. Si una descubre el curl, el producto entero es un fraude vendible. Sumá una filtración de salud y tenés demanda + fin del negocio. Pregunta ingenua: cuando "pausan" a alguien, ¿le sigue viviendo la sesión? Un bloqueo que no mata la sesión no es un bloqueo.</p>
+    <p>(5) WhatsApp: no rompas el envío. Definí "enviar" como permiso propio, separado de "administrar". Probalo con una asesora real ANTES de aplicar.</p>
+    </details>
+
+    <details class="adv"><summary>El Ejecutor <span class="lens">— ¿qué hago el lunes 9am?</span></summary>
+    <p>CRÍTICO 1 primero. El <code>blocked</code> cosmético es la única falla que un atacante ya-dentro explota hoy. Lunes 9am: abrí <code>src/lib/auth/account.ts</code>, agregá <code>blocked</code> al select de <code>getCurrentAccount</code>, tirá <code>ForbiddenError</code>. 20 minutos. En la misma migración 041: excluir blocked de <code>is_account_member</code> + <code>supabaseAdmin.auth.admin.signOut</code> en <code>set_member_blocked</code>. Verificás bloqueando la asesora de prueba (403).</p>
+    <p>Orden: 1) blocked; 2) CRÍTICO 2 PII (misma 041, SELECT admin, policy de 5 líneas); 3) automations/flows <code>requireRole('agent')</code> en la primera línea; 4) <code>raw_payload</code> (policy/revoke, martes).</p>
+    <p>RLS-es-el-muro NO alcanza: tus rutas /api con service-role BYPASSEAN RLS por diseño. Ahí <code>requireRole</code> server-side ES el muro. Falta base. Riesgo mayor no visto: cualquier endpoint service-role que reciba un <code>account_id</code>/<code>lead_id</code> del body sin validar pertenencia — grepeá <code>supabaseAdmin</code> y auditá cada uno.</p>
+    <p>WhatsApp, lunes 9:15: logueate como la asesora de prueba, abrí un lead, apretá enviar. Si falla, mirá logs Dokploy; si es RLS en <code>whatsapp_config</code>, agregá policy SELECT para agent o leé la config con service-role en <code>whatsapp/send</code>. Test en vivo, no teoría.</p>
+    </details>
+  </div>
+
+  <div class="foot">
+    Council de 5 asesores (Contrarian · Primeros Principios · Expansionista · Outsider · Ejecutor) + 3 revisores por pares (anonimizados) + síntesis del chairman. Base: <code>docs/superpowers/audits/2026-07-17-audit-roles-rbac.md</code> (auditoría en 4 dimensiones). Generado 2026-07-17.
+  </div>
+</div>
+</body>
+</html>
