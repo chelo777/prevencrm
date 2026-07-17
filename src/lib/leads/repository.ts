@@ -211,21 +211,23 @@ export function createLeadRepository(
     },
 
     async listEligibleAgents(): Promise<EligibleAgent[]> {
-      const { data: members } = await admin
+      const { data: members, error: membersError } = await admin
         .from("profiles")
         .select("user_id, lead_cap, receiving_since")
         .eq("account_id", accountId)
         .eq("is_lead_buyer", true)
         .eq("receiving_leads", true)
         .eq("blocked", false);
+      if (membersError) throw membersError;
       const rows = (members ?? []) as { user_id: string; lead_cap: number | null; receiving_since: string | null }[];
       if (rows.length === 0) return [];
 
       // Carga actual = deals abiertos del pipeline por asesor.
-      const { data: openDeals } = await admin
+      const { data: openDeals, error: openDealsError } = await admin
         .from("deals").select("assigned_agent_id")
         .eq("account_id", accountId).eq("pipeline_id", pipelineId)
         .eq("status", "open").not("assigned_agent_id", "is", null);
+      if (openDealsError) throw openDealsError;
       const load = new Map<string, number>();
       for (const d of openDeals ?? []) {
         const a = d.assigned_agent_id as string; load.set(a, (load.get(a) ?? 0) + 1);
@@ -235,12 +237,14 @@ export function createLeadRepository(
       for (const r of rows) {
         if (r.lead_cap != null) {
           const since = r.receiving_since ?? "1970-01-01";
-          const { count: assigned } = await admin.from("activity_log")
+          const { count: assigned, error: assignedError } = await admin.from("activity_log")
             .select("id", { count: "exact", head: true })
             .eq("user_id", r.user_id).eq("action", "lead_assigned").gte("created_at", since);
-          const { count: reclaimed } = await admin.from("activity_log")
+          if (assignedError) throw assignedError;
+          const { count: reclaimed, error: reclaimedError } = await admin.from("activity_log")
             .select("id", { count: "exact", head: true })
             .eq("user_id", r.user_id).eq("action", "lead_reclaimed").gte("created_at", since);
+          if (reclaimedError) throw reclaimedError;
           const received = (assigned ?? 0) - (reclaimed ?? 0);
           if (received >= r.lead_cap) continue; // auto-apagado por cupo
         }
@@ -261,9 +265,10 @@ export function createLeadRepository(
     },
 
     async recordAssignEvent(userId: string, dealId: string, kind: AssignEventKind) {
-      await admin.from("activity_log").insert({
+      const { error } = await admin.from("activity_log").insert({
         account_id: accountId, user_id: userId, deal_id: dealId, action: kind, meta: {},
       });
+      if (error) throw error;
     },
 
     async unassignDeal(dealId: string) {
@@ -272,26 +277,30 @@ export function createLeadRepository(
     },
 
     async listStaleAssignedLeads(reclaimAfterIso: string): Promise<StaleLead[]> {
-      const { data: initial } = await admin.from("pipeline_stages")
+      const { data: initial, error: initialError } = await admin.from("pipeline_stages")
         .select("id").eq("pipeline_id", pipelineId).order("position", { ascending: true }).limit(1).maybeSingle();
+      if (initialError) throw initialError;
       const initialStageId = initial?.id as string | undefined;
       if (!initialStageId) return [];
       const cutoffIso = new Date(Date.now() - STALE_DAYS * 86400_000).toISOString();
-      const { data: deals } = await admin.from("deals")
+      const { data: deals, error: dealsError } = await admin.from("deals")
         .select("id, assigned_agent_id, created_at")
         .eq("account_id", accountId).eq("pipeline_id", pipelineId).eq("stage_id", initialStageId)
         .not("assigned_agent_id", "is", null)
         .gt("created_at", reclaimAfterIso)   // gate: excluye backlog histórico
         .lt("created_at", cutoffIso)          // más viejo que el umbral de reclamo
         .limit(RECLAIM_BATCH);                // batch limit
+      if (dealsError) throw dealsError;
       const out: StaleLead[] = [];
       for (const d of deals ?? []) {
         // "Trabajado" = cualquier evento en activity_log para el deal DESPUÉS de crearse.
-        const { count } = await admin.from("activity_log")
+        const { count, error: countError } = await admin.from("activity_log")
           .select("id", { count: "exact", head: true })
           .eq("deal_id", d.id as string).gt("created_at", d.created_at as string);
+        if (countError) throw countError;
         if ((count ?? 0) > 0) continue;
-        const { data: lead } = await admin.from("leads").select("id").eq("deal_id", d.id as string).maybeSingle();
+        const { data: lead, error: leadError } = await admin.from("leads").select("id").eq("deal_id", d.id as string).maybeSingle();
+        if (leadError) throw leadError;
         if (lead) out.push({ leadId: lead.id as string, dealId: d.id as string, assignedAgentId: d.assigned_agent_id as string });
       }
       return out;
