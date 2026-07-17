@@ -353,7 +353,7 @@ export function ContactDetailView({
     setAssignedAgentId(nextAgentId); // optimista
     const { error } = await supabase
       .from('deals')
-      .update({ assigned_agent_id: nextAgentId || null })
+      .update({ assigned_agent_id: nextAgentId || null, assigned_at: nextAgentId ? new Date().toISOString() : null })
       .eq('id', primary.id);
     if (error) {
       setAssignedAgentId(prev);

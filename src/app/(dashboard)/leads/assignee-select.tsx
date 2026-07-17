@@ -38,7 +38,7 @@ export function AssigneeSelect({
     const supabase = createClient();
     const { error } = await supabase
       .from("deals")
-      .update({ assigned_agent_id: next || null })
+      .update({ assigned_agent_id: next || null, assigned_at: next ? new Date().toISOString() : null })
       .eq("id", dealId);
     if (error) {
       setAgentId(prev);

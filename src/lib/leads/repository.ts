@@ -256,7 +256,7 @@ export function createLeadRepository(
     async assignDealIfUnassigned(dealId, userId) {
       const { data, error } = await admin
         .from("deals")
-        .update({ assigned_agent_id: userId })
+        .update({ assigned_agent_id: userId, assigned_at: new Date().toISOString() })
         .eq("id", dealId)
         .is("assigned_agent_id", null)
         .select("id");
@@ -284,16 +284,16 @@ export function createLeadRepository(
       if (!initialStageId) return [];
       const cutoffIso = new Date(Date.now() - STALE_DAYS * 86400_000).toISOString();
       const { data: deals, error: dealsError } = await admin.from("deals")
-        .select("id, assigned_agent_id, created_at, contact_id")
+        .select("id, assigned_agent_id, created_at, assigned_at, contact_id")
         .eq("account_id", accountId).eq("pipeline_id", pipelineId).eq("stage_id", initialStageId)
         .not("assigned_agent_id", "is", null)
         .gt("created_at", reclaimAfterIso)   // gate: excluye backlog histórico
-        .lt("created_at", cutoffIso)          // más viejo que el umbral de reclamo
+        .lt("assigned_at", cutoffIso)         // más viejo que el umbral de reclamo (por asignación, no creación)
         .limit(RECLAIM_BATCH);                // batch limit
       if (dealsError) throw dealsError;
       const out: StaleLead[] = [];
       for (const d of deals ?? []) {
-        // "Trabajado" = nota manual o click-to-chat en contact_notes DESPUÉS de crearse el deal.
+        // "Trabajado" = nota manual o click-to-chat en contact_notes DESPUÉS de la asignación actual.
         // (activity_log no sirve: la auto-asignación del router también registra "lead_assigned" ahí,
         // lo que marcaría todo lead recién asignado como "trabajado" al instante.)
         const contactId = d.contact_id as string | null;
@@ -302,7 +302,7 @@ export function createLeadRepository(
             .from("contact_notes")
             .select("id", { count: "exact", head: true })
             .eq("contact_id", contactId)
-            .gt("created_at", d.created_at as string);
+            .gt("created_at", (d.assigned_at as string) ?? (d.created_at as string));
           if (nErr) throw nErr;
           if ((count ?? 0) > 0) continue; // trabajado: nota post-asignación (incluye click-to-chat)
         }
