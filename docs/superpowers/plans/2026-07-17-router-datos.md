@@ -1,885 +1,580 @@
-# Router de datos + VBO por capitas — Implementation Plan
+# Router de datos + VBO por capitas — Implementation Plan (v2, post-council)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Repartir los leads de un pozo común entre los asesores que están recibiendo (con cupo manual y reclamo de leads sin trabajar), y mandar a Meta el valor por capitas para optimización por valor (VBO).
+**Goal:** Repartir leads de un pozo común entre asesores elegibles (reciben + bajo su cupo), con reclamo seguro de leads sin trabajar, y mandar a Meta el valor por capitas (VBO). Contador de recibidos **derivado** de eventos con timestamp (sin columna mutable).
 
-**Architecture:** Se extiende la ingesta existente (puerto `LeadRepository` + `ingest.ts`, adaptador `repository.ts`) para filtrar el pool por `receiving_leads` y llevar un contador de recibidos; un paso nuevo de reclamo corre en el cron `/api/leads/sync`; y `capi.ts` agrega `custom_data.value = capitas` al payload. Toda la config nueva vive en la migración 042 (columnas + RPCs admin-only, patrón de la 039/018).
+**Architecture:** Se extiende la ingesta (`ingest.ts` + puerto `LeadRepository` + adaptador `repository.ts`). El reparto es una única función `assignFromPool` usada por la ingesta Y el reclamo (DRY). "Recibidos en la tanda" se deriva de `activity_log` (`lead_assigned` − `lead_reclaimed` desde `profiles.receiving_since`). VBO agrega `custom_data.value=capitas` en `capi.ts`.
 
-**Tech Stack:** Next.js 16 (App Router), Supabase (Postgres + RLS), TypeScript strict, Vitest. Puerto/adaptador con `FakeRepo` en memoria para tests de dominio.
+**Tech Stack:** Next.js 16, Supabase (Postgres + RLS), TypeScript strict, Vitest, puerto/adaptador con `FakeRepo`.
 
 ## Global Constraints
 
-- **TZ / fechas:** el cron corre con `TZ=America/Argentina/Cordoba`. Usar `new Date()` server-side; no depender de la TZ del cliente.
-- **Migraciones aditivas, numeradas.** Próxima libre = **042**. Aplicar vía el `run-sql.js` del scratchpad (Management API) y dejar el archivo en `supabase/migrations/`.
-- **Columnas en inglés** (convención: `is_lead_buyer`, `blocked`); **UI en español** ("Recibe leads", "N recibidos").
-- **Seguridad (contención 041):** `is_account_member` excluye bloqueados; cambios sobre OTROS perfiles van por RPC `SECURITY DEFINER` admin-only con `WHERE account_id`, nunca al owner ni a sí mismo. El contador lo toca solo el service-role del router.
-- **CAPI compliance (B8):** el payload lleva SOLO PII hasheada (allowlist) + metadata + `lead_id` + ahora `custom_data.value`. JAMÁS respuestas del formulario ni datos de salud.
-- **Fuera de alcance:** precio ARS por deal, corrección de valor post-envío, venta de datos (SP3), config de Meta (form global, activar Value Optimization en el adset).
+- **Migraciones aditivas.** Próxima libre = **042**. Aplicar por `run-sql.js` (Management API).
+- **Columnas en inglés**, UI en español.
+- **Deploy = push a main (Dokploy).** ⚠️ **Cada commit a main DEBE pasar `npm run build` local antes de pushear.** El gate real es build/typecheck, NO Vitest (el FakeRepo da falso verde). Ideal: feature branch + merge solo en verde.
+- **Seguridad (041):** cambios sobre otros perfiles por RPC `SECURITY DEFINER` admin-only con `WHERE account_id`, sin owner/self. El router escribe eventos/asignaciones con **service-role** (cron), que bypassea RLS.
+- **CAPI compliance:** payload SOLO PII hasheada + metadata + `lead_id` + `custom_data.value`. Nunca respuestas del form ni salud.
+- **Contador DERIVADO** (R1): NO existe columna `leads_received_count`.
+- **Fuera de alcance:** precio ARS, corrección de valor post-envío, tablero/velocidad/valor-por-adset/tie-breaker meritocrático (fast-follow), SP3, config de Meta.
 
 ---
 
-### Task 0 (prerrequisito, sin código): verificar autoAssign
+### Task 0 (spike, sin commit): pre-checks
 
-**Files:** ninguno (verificación).
-
-- [ ] **Step 1:** Confirmar si la fuente activa tiene `auto_assign = true`. Correr en el scratchpad:
-
+- [ ] **autoAssign:** `SELECT id, name, auto_assign, pipeline_id FROM lead_sources WHERE active = true;` — si `false`, el router no reparte; avisar (es config de la fuente).
+- [ ] **Etapa inicial + nombre de "Calificado":**
 ```sql
-SELECT id, name, kind, auto_assign, pipeline_id FROM lead_sources WHERE active = true;
+SELECT ps.name, ps.position, ps.pipeline_id FROM pipeline_stages ps
+JOIN pipelines p ON p.id=ps.pipeline_id
+WHERE p.account_id='9b462779-62b3-4784-9a21-26aa2e6bd832' ORDER BY ps.pipeline_id, ps.position;
 ```
-
-Expected: ver el/los `lead_sources` activos y su `auto_assign`. Si `auto_assign=false`, el router MVP **no reparte** — anotar y avisar al usuario (es una decisión de config de la fuente, no de este plan). El resto del plan asume que se activará.
-
-- [ ] **Step 2:** Confirmar la etapa inicial del pipeline (para el reclamo). Correr:
-
-```sql
-SELECT ps.id, ps.name, ps.position, ps.pipeline_id
-FROM pipeline_stages ps
-JOIN pipelines p ON p.id = ps.pipeline_id
-WHERE p.account_id = '9b462779-62b3-4784-9a21-26aa2e6bd832'
-ORDER BY ps.pipeline_id, ps.position;
-```
-
-Expected: la etapa `position` mínima por pipeline es "Nuevo" (la inicial). Anotar su nombre exacto — el reclamo la usa.
+Anotar: etapa `position` mínima = inicial (para el reclamo); nombre exacto de "Calificado" (para el gate de capitas).
+- [ ] **Backlog:** `SELECT count(*) FROM deals WHERE account_id='...' AND assigned_agent_id IS NOT NULL;` — dimensiona cuántos históricos existen (el reclamo los excluye por `reclaim_after`, pero conviene saberlo).
 
 ---
 
-### Task 1: Migración 042 — schema + RPCs
+### Task 1: Migración 042 — schema + RPCs (contador derivado + cupo)
 
-**Files:**
-- Create: `supabase/migrations/042_router_datos.sql`
-- Test: verificación SQL en el scratchpad (no hay tests unitarios de SQL en el repo).
+**Files:** Create `supabase/migrations/042_router_datos.sql`
 
-**Interfaces:**
-- Produces: columnas `profiles.receiving_leads BOOLEAN`, `profiles.leads_received_count INTEGER`, `deals.capitas INTEGER`, `lead_capi_config.send_value BOOLEAN`; RPCs `set_member_receiving(uuid, boolean)`, `reset_member_lead_count(uuid)`.
+**Interfaces — Produces:** columnas `profiles.receiving_leads`, `profiles.receiving_since`, `profiles.lead_cap`, `deals.capitas`, `lead_capi_config.send_value`; RPCs `set_member_receiving(uuid,boolean)`, `set_member_cap(uuid,integer)`, `reset_member_cycle(uuid)`.
 
 - [ ] **Step 1: Escribir la migración**
 
 ```sql
 -- 042_router_datos.sql — router de datos (pozo común) + VBO por capitas.
---
--- profiles.receiving_leads      — el asesor entra a la fila de reparto.
--- profiles.leads_received_count — contador de recibidos (cupo manual).
--- deals.capitas                 — vidas cubiertas; alimenta custom_data.value.
--- lead_capi_config.send_value   — si esta regla manda value=capitas.
---
--- RPCs admin-only (patrón 039/018): set_member_receiving / reset_member_lead_count.
+-- Contador DERIVADO de activity_log (lead_assigned − lead_reclaimed desde
+-- receiving_since); no hay columna de contador mutable.
 
 ALTER TABLE profiles
   ADD COLUMN IF NOT EXISTS receiving_leads BOOLEAN NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS leads_received_count INTEGER NOT NULL DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS receiving_since TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS lead_cap INTEGER;  -- NULL = sin límite
 
--- Preservar comportamiento actual: los compradores existentes arrancan
--- recibiendo; los nuevos arrancan apagados hasta que el admin los active.
-UPDATE profiles SET receiving_leads = true WHERE is_lead_buyer = true;
+-- Compradores existentes arrancan recibiendo, tanda desde ahora.
+UPDATE profiles SET receiving_leads = true, receiving_since = now()
+  WHERE is_lead_buyer = true;
 
-ALTER TABLE deals
-  ADD COLUMN IF NOT EXISTS capitas INTEGER;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS capitas INTEGER;
 
-ALTER TABLE lead_capi_config
-  ADD COLUMN IF NOT EXISTS send_value BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE lead_capi_config ADD COLUMN IF NOT EXISTS send_value BOOLEAN NOT NULL DEFAULT false;
+UPDATE lead_capi_config SET send_value = true WHERE event_name IN ('calificado', 'closed-won');
 
--- Los eventos "positivos" llevan el valor; no-calificado/perdido no.
-UPDATE lead_capi_config SET send_value = true
-  WHERE event_name IN ('calificado', 'closed-won');
-
--- ------------------------------------------------------------
--- set_member_receiving(p_user_id, p_receiving) — admin+ prende/apaga la
--- recepción de un miembro. Al ACTIVAR resetea el contador (nueva tanda).
--- ------------------------------------------------------------
+-- set_member_receiving: al ACTIVAR, arranca nueva tanda (receiving_since=now()).
 CREATE OR REPLACE FUNCTION set_member_receiving(p_user_id UUID, p_receiving BOOLEAN)
-RETURNS VOID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
-AS $$
-DECLARE
-  v_account UUID;
-  v_role account_role_enum;
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_account UUID; v_role account_role_enum;
 BEGIN
-  SELECT account_id, account_role INTO v_account, v_role
-    FROM profiles WHERE user_id = p_user_id;
-  IF v_account IS NULL THEN
-    RAISE EXCEPTION 'Usuario no encontrado' USING ERRCODE = '22023';
-  END IF;
-  IF NOT is_account_member(v_account, 'admin') THEN
-    RAISE EXCEPTION 'Solo un admin puede configurar la recepción' USING ERRCODE = '42501';
-  END IF;
-  IF v_role = 'owner' THEN
-    RAISE EXCEPTION 'El dueño no se gestiona por acá' USING ERRCODE = '22023';
-  END IF;
-  UPDATE profiles
-    SET receiving_leads = p_receiving,
-        leads_received_count = CASE WHEN p_receiving THEN 0 ELSE leads_received_count END,
-        updated_at = now()
+  SELECT account_id, account_role INTO v_account, v_role FROM profiles WHERE user_id = p_user_id;
+  IF v_account IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado' USING ERRCODE='22023'; END IF;
+  IF NOT is_account_member(v_account,'admin') THEN RAISE EXCEPTION 'Solo un admin' USING ERRCODE='42501'; END IF;
+  IF v_role='owner' THEN RAISE EXCEPTION 'El dueño no se gestiona por acá' USING ERRCODE='22023'; END IF;
+  UPDATE profiles SET receiving_leads = p_receiving,
+    receiving_since = CASE WHEN p_receiving THEN now() ELSE receiving_since END,
+    updated_at = now()
     WHERE user_id = p_user_id AND account_id = v_account;
-END;
-$$;
+END; $$;
 
--- ------------------------------------------------------------
--- reset_member_lead_count(p_user_id) — admin+ resetea el contador a 0.
--- ------------------------------------------------------------
-CREATE OR REPLACE FUNCTION reset_member_lead_count(p_user_id UUID)
-RETURNS VOID
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
-AS $$
-DECLARE
-  v_account UUID;
+-- set_member_cap: cupo por asesor (NULL = sin límite).
+CREATE OR REPLACE FUNCTION set_member_cap(p_user_id UUID, p_cap INTEGER)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_account UUID;
 BEGIN
   SELECT account_id INTO v_account FROM profiles WHERE user_id = p_user_id;
-  IF v_account IS NULL THEN
-    RAISE EXCEPTION 'Usuario no encontrado' USING ERRCODE = '22023';
-  END IF;
-  IF NOT is_account_member(v_account, 'admin') THEN
-    RAISE EXCEPTION 'Solo un admin puede resetear el contador' USING ERRCODE = '42501';
-  END IF;
-  UPDATE profiles
-    SET leads_received_count = 0, updated_at = now()
+  IF v_account IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado' USING ERRCODE='22023'; END IF;
+  IF NOT is_account_member(v_account,'admin') THEN RAISE EXCEPTION 'Solo un admin' USING ERRCODE='42501'; END IF;
+  IF p_cap IS NOT NULL AND p_cap < 0 THEN RAISE EXCEPTION 'Cupo inválido' USING ERRCODE='22023'; END IF;
+  UPDATE profiles SET lead_cap = p_cap, updated_at = now()
     WHERE user_id = p_user_id AND account_id = v_account;
-END;
-$$;
+END; $$;
+
+-- reset_member_cycle: arranca una tanda nueva SIN borrar historial (mueve receiving_since).
+CREATE OR REPLACE FUNCTION reset_member_cycle(p_user_id UUID)
+RETURNS VOID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_account UUID;
+BEGIN
+  SELECT account_id INTO v_account FROM profiles WHERE user_id = p_user_id;
+  IF v_account IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado' USING ERRCODE='22023'; END IF;
+  IF NOT is_account_member(v_account,'admin') THEN RAISE EXCEPTION 'Solo un admin' USING ERRCODE='42501'; END IF;
+  UPDATE profiles SET receiving_since = now(), updated_at = now()
+    WHERE user_id = p_user_id AND account_id = v_account;
+END; $$;
 
 GRANT EXECUTE ON FUNCTION set_member_receiving(UUID, BOOLEAN) TO authenticated;
-GRANT EXECUTE ON FUNCTION reset_member_lead_count(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION set_member_cap(UUID, INTEGER) TO authenticated;
+GRANT EXECUTE ON FUNCTION reset_member_cycle(UUID) TO authenticated;
 ```
 
-- [ ] **Step 2: Aplicar la migración**
-
-Run (desde el scratchpad): `node run-sql.js <copia de 042_router_datos.sql>`
-Expected: `[]` (éxito). Correr dos veces para confirmar idempotencia (IF NOT EXISTS / CREATE OR REPLACE).
-
-- [ ] **Step 3: Verificar**
-
-```sql
-SELECT count(*) FILTER (WHERE receiving_leads) AS recibiendo,
-       count(*) FILTER (WHERE is_lead_buyer) AS compradores
-FROM profiles WHERE account_id = '9b462779-62b3-4784-9a21-26aa2e6bd832';
-SELECT event_name, send_value FROM lead_capi_config
-WHERE account_id = '9b462779-62b3-4784-9a21-26aa2e6bd832' ORDER BY event_name;
-```
-Expected: `recibiendo == compradores` (backfill correcto); `send_value=true` solo en calificado/closed-won.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add supabase/migrations/042_router_datos.sql
-git commit -m "feat(router): migración 042 — receiving_leads + capitas + send_value + RPCs"
-```
+- [ ] **Step 2: Aplicar** (`node run-sql.js`) → `[]`. Correr 2× (idempotente).
+- [ ] **Step 3: Verificar** backfill (`receiving_leads`/`receiving_since` en compradores; `send_value` solo calificado/closed-won).
+- [ ] **Step 4: Commit** `feat(router): migración 042 — receiving/cap/capitas/send_value + RPCs`
 
 ---
 
-### Task 2: Extender el puerto `LeadRepository` + `FakeRepo`
+### Task 2 (COMMIT ATÓMICO): puerto + FakeRepo + adaptador
+
+⚠️ **Un solo commit.** Cambiar el puerto sin el adaptador deja `repository.ts` incompatible → build rojo → deploy roto (Dokploy).
 
 **Files:**
-- Modify: `src/lib/leads/types.ts` (el puerto)
-- Modify: `src/lib/leads/leads.test.ts:123` (FakeRepo)
+- Modify: `src/lib/leads/types.ts` (puerto)
+- Create: `src/lib/leads/leads.test-helpers.ts` (mover `FakeRepo` acá, `export`)
+- Modify: `src/lib/leads/leads.test.ts` (importar `FakeRepo` desde test-helpers)
+- Modify: `src/lib/leads/repository.ts` (adaptador)
 
-**Interfaces:**
-- Produces (nuevas firmas del puerto):
-  - `assignDealIfUnassigned(dealId, userId): Promise<boolean>` — ahora **devuelve si realmente asignó** (para incrementar el contador solo una vez).
-  - `incrementReceivedCount(userId: string): Promise<void>`
-  - `decrementReceivedCount(userId: string): Promise<void>`
-  - `listStaleAssignedLeads(): Promise<StaleLead[]>` — leads asignados, en etapa inicial, sin nota, con deal más viejo que el umbral.
-  - `unassignDeal(dealId: string): Promise<void>`
-  - Nuevo tipo `StaleLead { leadId: string; dealId: string; assignedAgentId: string }`.
-
-- [ ] **Step 1: Actualizar el puerto en `types.ts`**
-
-Cambiar la firma de `assignDealIfUnassigned` (línea ~193-194) a que devuelva boolean, y agregar los métodos + tipo:
-
+**Interfaces — Produces (puerto):**
 ```typescript
-/** Un lead asignado pero sin trabajar, candidato a reclamo. */
-export interface StaleLead {
-  leadId: string;
-  dealId: string;
-  assignedAgentId: string;
-}
+export interface EligibleAgent { userId: string; openDeals: number; }
+export interface StaleLead { leadId: string; dealId: string; assignedAgentId: string; }
+export type AssignEventKind = "lead_assigned" | "lead_reclaimed";
 ```
+Métodos nuevos/cambiados en `LeadRepository`:
+- `listEligibleAgents(): Promise<EligibleAgent[]>` — reemplaza `listAssignableAgents`. Filtra `is_lead_buyer && receiving_leads && !blocked && (lead_cap IS NULL || recibidos_tanda < lead_cap)`. `recibidos_tanda` = `count(lead_assigned) − count(lead_reclaimed)` en activity_log desde `receiving_since`.
+- `assignDealIfUnassigned(dealId, userId): Promise<boolean>` — ahora devuelve si asignó.
+- `recordAssignEvent(userId, dealId, kind): Promise<void>` — inserta en activity_log.
+- `unassignDeal(dealId): Promise<void>`
+- `listStaleAssignedLeads(reclaimAfterIso: string): Promise<StaleLead[]>` — deals asignados, en etapa inicial, `created_at > reclaimAfterIso`, **sin actividad post-asignación en activity_log**.
 
-En `interface LeadRepository`, reemplazar la firma de `assignDealIfUnassigned` y agregar:
+- [ ] **Step 1: Puerto en `types.ts`** — agregar los tipos de arriba; reemplazar `listAssignableAgents(): Promise<AssignableAgent[]>` por `listEligibleAgents(): Promise<EligibleAgent[]>`; cambiar la firma de `assignDealIfUnassigned` a `Promise<boolean>`; agregar `recordAssignEvent`, `unassignDeal`, `listStaleAssignedLeads`. Mantener `AssignableAgent` como alias de `EligibleAgent` si algún import externo lo usa (grep primero). `pickLeastLoaded` queda igual (opera sobre `{userId, openDeals}`).
 
-```typescript
-  /** Asigna el deal solo si está sin asignar. Devuelve true si asignó. */
-  assignDealIfUnassigned(dealId: string, userId: string): Promise<boolean>;
-
-  /** +1 al contador de recibidos del asesor (cupo). */
-  incrementReceivedCount(userId: string): Promise<void>;
-
-  /** -1 al contador (el asesor devolvió un lead por reclamo). */
-  decrementReceivedCount(userId: string): Promise<void>;
-
-  /** Leads asignados, en etapa inicial, sin nota, con deal más viejo que el
-   *  umbral de reclamo (config del adaptador). */
-  listStaleAssignedLeads(): Promise<StaleLead[]>;
-
-  /** Devuelve un deal al pozo (assigned_agent_id = null). */
-  unassignDeal(dealId: string): Promise<void>;
-```
-
-- [ ] **Step 2: Actualizar el `FakeRepo` en `leads.test.ts`**
-
-Agregar estado + implementar los métodos nuevos, y hacer que `assignDealIfUnassigned` devuelva boolean:
+- [ ] **Step 2: Mover `FakeRepo` a `leads.test-helpers.ts`** — cortar la clase de `leads.test.ts` (línea ~123) a un archivo nuevo con `export class FakeRepo implements LeadRepository`. En `leads.test.ts`, `import { FakeRepo } from "./leads.test-helpers";`. Agregar al Fake:
 
 ```typescript
-  received = new Map<string, number>();
+  eligible: EligibleAgent[] = [{ userId: "u1", openDeals: 0 }, { userId: "u2", openDeals: 1 }];
+  events: { userId: string; dealId: string; kind: AssignEventKind }[] = [];
   stale: StaleLead[] = [];
 
+  async listEligibleAgents() { return this.eligible; }
   async assignDealIfUnassigned(dealId: string, userId: string): Promise<boolean> {
     const d = this.deals.find((x) => x.id === dealId);
     if (d && !d.assigned) { d.assigned = userId; return true; }
     return false;
   }
-  async incrementReceivedCount(userId: string): Promise<void> {
-    this.received.set(userId, (this.received.get(userId) ?? 0) + 1);
+  async recordAssignEvent(userId: string, dealId: string, kind: AssignEventKind) {
+    this.events.push({ userId, dealId, kind });
   }
-  async decrementReceivedCount(userId: string): Promise<void> {
-    this.received.set(userId, (this.received.get(userId) ?? 0) - 1);
-  }
-  async listStaleAssignedLeads(): Promise<StaleLead[]> {
-    return this.stale;
-  }
-  async unassignDeal(dealId: string): Promise<void> {
+  async unassignDeal(dealId: string) {
     const d = this.deals.find((x) => x.id === dealId);
     if (d) d.assigned = undefined;
   }
+  async listStaleAssignedLeads() { return this.stale; }
 ```
+Borrar el viejo `listAssignableAgents` del Fake.
 
-Importar `StaleLead` en el bloque de imports del test.
-
-- [ ] **Step 3: Correr los tests existentes (deben seguir pasando)**
-
-Run: `npx vitest run src/lib/leads`
-Expected: PASS (la firma boolean no rompe los tests actuales — no leen el retorno).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/lib/leads/types.ts src/lib/leads/leads.test.ts
-git commit -m "feat(router): extender puerto LeadRepository (contador + reclamo)"
-```
-
----
-
-### Task 3: Contador de recibidos en la auto-asignación
-
-**Files:**
-- Modify: `src/lib/leads/ingest.ts:104-111`
-- Test: `src/lib/leads/leads.test.ts`
-
-**Interfaces:**
-- Consumes: `repo.assignDealIfUnassigned(): Promise<boolean>`, `repo.incrementReceivedCount()`.
-
-- [ ] **Step 1: Escribir el test (falla)**
+- [ ] **Step 3: Adaptador `repository.ts`** — reemplazar `listAssignableAgents` (207-236) por `listEligibleAgents`:
 
 ```typescript
-it("incrementa el contador del asesor al auto-asignar", async () => {
-  const repo = new FakeRepo();
-  await ingestLead(repo, makeLead("l:900"), { autoAssign: true });
-  // u1 es el least-loaded del FakeRepo (openDeals 0).
-  expect(repo.received.get("u1")).toBe(1);
-});
-
-it("no incrementa si el deal ya estaba asignado (idempotente)", async () => {
-  const repo = new FakeRepo();
-  await ingestLead(repo, makeLead("l:901"), { autoAssign: true });
-  // Segundo ciclo sobre el mismo lead: assign devuelve false → sin +1.
-  await ingestLead(repo, makeLead("l:901"), { autoAssign: true });
-  expect(repo.received.get("u1")).toBe(1);
-});
-```
-
-- [ ] **Step 2: Correr (debe fallar)**
-
-Run: `npx vitest run src/lib/leads -t "contador"`
-Expected: FAIL (hoy no se incrementa).
-
-- [ ] **Step 3: Implementar en `ingest.ts`**
-
-Reemplazar el bloque de asignación (líneas 104-111):
-
-```typescript
-  // 4. Asignación least-loaded (idempotente: solo si sin asignar). El
-  //    contador de recibidos solo sube cuando la asignación realmente pasa.
-  if (opts.autoAssign) {
-    const agents = await repo.listAssignableAgents();
-    const pick = pickLeastLoaded(agents);
-    if (pick) {
-      const assigned = await repo.assignDealIfUnassigned(dealId, pick.userId);
-      if (assigned) await repo.incrementReceivedCount(pick.userId);
-    }
-  }
-```
-
-- [ ] **Step 4: Correr (debe pasar)**
-
-Run: `npx vitest run src/lib/leads`
-Expected: PASS (todos).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/lib/leads/ingest.ts src/lib/leads/leads.test.ts
-git commit -m "feat(router): contar recibidos al auto-asignar (cupo)"
-```
-
----
-
-### Task 4: Filtro `receiving_leads` + contador en el adaptador Supabase
-
-**Files:**
-- Modify: `src/lib/leads/repository.ts:207-245` (listAssignableAgents, assignDealIfUnassigned) + agregar los métodos nuevos.
-
-**Interfaces:**
-- Consumes: columnas de la migración 042.
-- Produces: las implementaciones reales de los métodos del puerto agregados en Task 2.
-
-> Nota: el adaptador Supabase no tiene tests unitarios (usa el cliente real); su corrección se valida por el typecheck + la verificación en vivo (Task 9). El dominio ya quedó cubierto por el FakeRepo.
-
-- [ ] **Step 1: `listAssignableAgents` filtra por `receiving_leads`**
-
-En `repository.ts:208-212`, agregar el filtro:
-
-```typescript
-      const { data: members, error } = await admin
+    async listEligibleAgents(): Promise<EligibleAgent[]> {
+      const { data: members } = await admin
         .from("profiles")
-        .select("user_id")
+        .select("user_id, lead_cap, receiving_since")
         .eq("account_id", accountId)
         .eq("is_lead_buyer", true)
-        .eq("receiving_leads", true);
-```
+        .eq("receiving_leads", true)
+        .eq("blocked", false);
+      const rows = (members ?? []) as { user_id: string; lead_cap: number | null; receiving_since: string | null }[];
+      if (rows.length === 0) return [];
 
-- [ ] **Step 2: `assignDealIfUnassigned` devuelve boolean**
+      // Carga actual = deals abiertos del pipeline por asesor.
+      const { data: openDeals } = await admin
+        .from("deals").select("assigned_agent_id")
+        .eq("account_id", accountId).eq("pipeline_id", pipelineId)
+        .eq("status", "open").not("assigned_agent_id", "is", null);
+      const load = new Map<string, number>();
+      for (const d of openDeals ?? []) {
+        const a = d.assigned_agent_id as string; load.set(a, (load.get(a) ?? 0) + 1);
+      }
 
-Reemplazar el método (líneas 238-245):
-
-```typescript
-    async assignDealIfUnassigned(dealId, userId): Promise<boolean> {
-      const { data, error } = await admin
-        .from("deals")
-        .update({ assigned_agent_id: userId })
-        .eq("id", dealId)
-        .is("assigned_agent_id", null)
-        .select("id");
-      if (error) throw error;
-      return (data?.length ?? 0) > 0;
-    },
-```
-
-- [ ] **Step 3: Agregar los métodos nuevos al adaptador**
-
-Después de `assignDealIfUnassigned`, agregar:
-
-```typescript
-    async incrementReceivedCount(userId) {
-      // +1 atómico vía RPC de incremento no existe; usamos un update
-      // leído-y-escrito bajo service-role (baja concurrencia del cron).
-      const { data } = await admin
-        .from("profiles")
-        .select("leads_received_count")
-        .eq("user_id", userId)
-        .maybeSingle();
-      const next = ((data?.leads_received_count as number | null) ?? 0) + 1;
-      await admin.from("profiles").update({ leads_received_count: next }).eq("user_id", userId);
-    },
-
-    async decrementReceivedCount(userId) {
-      const { data } = await admin
-        .from("profiles")
-        .select("leads_received_count")
-        .eq("user_id", userId)
-        .maybeSingle();
-      const next = Math.max(0, ((data?.leads_received_count as number | null) ?? 0) - 1);
-      await admin.from("profiles").update({ leads_received_count: next }).eq("user_id", userId);
-    },
-
-    async unassignDeal(dealId) {
-      const { error } = await admin
-        .from("deals")
-        .update({ assigned_agent_id: null })
-        .eq("id", dealId);
-      if (error) throw error;
-    },
-
-    async listStaleAssignedLeads() {
-      // Etapa inicial = la de menor position en el pipeline de la fuente.
-      const { data: initial } = await admin
-        .from("pipeline_stages")
-        .select("id")
-        .eq("pipeline_id", pipelineId)
-        .order("position", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      const initialStageId = initial?.id as string | undefined;
-      if (!initialStageId) return [];
-
-      const cutoffIso = new Date(Date.now() - STALE_DAYS * 86400_000).toISOString();
-      // Deals asignados, aún en la etapa inicial, más viejos que el umbral.
-      const { data: deals } = await admin
-        .from("deals")
-        .select("id, assigned_agent_id, contact_id")
-        .eq("account_id", accountId)
-        .eq("pipeline_id", pipelineId)
-        .eq("stage_id", initialStageId)
-        .not("assigned_agent_id", "is", null)
-        .lt("created_at", cutoffIso);
-
-      const out: StaleLead[] = [];
-      for (const d of deals ?? []) {
-        const contactId = d.contact_id as string | null;
-        // "Trabajado" = tiene al menos una nota. Sin nota → sin trabajar.
-        if (contactId) {
-          const { count } = await admin
-            .from("contact_notes")
+      const out: EligibleAgent[] = [];
+      for (const r of rows) {
+        if (r.lead_cap != null) {
+          const since = r.receiving_since ?? "1970-01-01";
+          const { count: assigned } = await admin.from("activity_log")
             .select("id", { count: "exact", head: true })
-            .eq("contact_id", contactId);
-          if ((count ?? 0) > 0) continue;
+            .eq("user_id", r.user_id).eq("action", "lead_assigned").gte("created_at", since);
+          const { count: reclaimed } = await admin.from("activity_log")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", r.user_id).eq("action", "lead_reclaimed").gte("created_at", since);
+          const received = (assigned ?? 0) - (reclaimed ?? 0);
+          if (received >= r.lead_cap) continue; // auto-apagado por cupo
         }
-        const { data: lead } = await admin
-          .from("leads")
-          .select("id")
-          .eq("deal_id", d.id as string)
-          .maybeSingle();
-        if (lead) {
-          out.push({
-            leadId: lead.id as string,
-            dealId: d.id as string,
-            assignedAgentId: d.assigned_agent_id as string,
-          });
-        }
+        out.push({ userId: r.user_id, openDeals: load.get(r.user_id) ?? 0 });
       }
       return out;
     },
 ```
-
-Agregar la constante arriba del factory (junto a `DEAL_CURRENCY`):
+Reemplazar `assignDealIfUnassigned` (238-245) para devolver boolean (`.select("id")` → `return (data?.length ?? 0) > 0`). Agregar:
 
 ```typescript
-/** Días sin trabajar antes de reclamar un lead al pozo. */
-const STALE_DAYS = 3;
+    async recordAssignEvent(userId, dealId, kind) {
+      await admin.from("activity_log").insert({
+        account_id: accountId, user_id: userId, deal_id: dealId, action: kind, meta: {},
+      });
+    },
+    async unassignDeal(dealId) {
+      const { error } = await admin.from("deals").update({ assigned_agent_id: null }).eq("id", dealId);
+      if (error) throw error;
+    },
+    async listStaleAssignedLeads(reclaimAfterIso) {
+      const { data: initial } = await admin.from("pipeline_stages")
+        .select("id").eq("pipeline_id", pipelineId).order("position", { ascending: true }).limit(1).maybeSingle();
+      const initialStageId = initial?.id as string | undefined;
+      if (!initialStageId) return [];
+      const cutoffIso = new Date(Date.now() - STALE_DAYS * 86400_000).toISOString();
+      const { data: deals } = await admin.from("deals")
+        .select("id, assigned_agent_id, created_at")
+        .eq("account_id", accountId).eq("pipeline_id", pipelineId).eq("stage_id", initialStageId)
+        .not("assigned_agent_id", "is", null)
+        .gt("created_at", reclaimAfterIso)   // gate: excluye backlog histórico
+        .lt("created_at", cutoffIso)          // más viejo que el umbral de reclamo
+        .limit(RECLAIM_BATCH);                // batch limit
+      const out: StaleLead[] = [];
+      for (const d of deals ?? []) {
+        // "Trabajado" = cualquier evento en activity_log para el deal DESPUÉS de crearse.
+        const { count } = await admin.from("activity_log")
+          .select("id", { count: "exact", head: true })
+          .eq("deal_id", d.id as string).gt("created_at", d.created_at as string);
+        if ((count ?? 0) > 0) continue;
+        const { data: lead } = await admin.from("leads").select("id").eq("deal_id", d.id as string).maybeSingle();
+        if (lead) out.push({ leadId: lead.id as string, dealId: d.id as string, assignedAgentId: d.assigned_agent_id as string });
+      }
+      return out;
+    },
 ```
+Agregar constantes arriba del factory: `const STALE_DAYS = 3;` y `const RECLAIM_BATCH = 50;`. Importar `EligibleAgent`, `StaleLead`, `AssignEventKind`.
 
-Importar `StaleLead` en el bloque de tipos del archivo.
+- [ ] **Step 4: Correr tests existentes + typecheck + build**
 
-- [ ] **Step 4: Typecheck**
+Run: `npx vitest run src/lib/leads && npm run typecheck && npm run build`
+Expected: los tests de ingest siguen pasando (el Fake ahora tiene `listEligibleAgents`); build en verde. Si `ingest.ts` todavía llama `listAssignableAgents`, **arreglarlo en este mismo commit** (ver Task 3 Step 3, pero el rename mínimo va acá para que compile).
 
-Run: `npm run typecheck`
-Expected: sin errores (el adaptador cumple el puerto extendido).
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit atómico**
 
 ```bash
-git add src/lib/leads/repository.ts
-git commit -m "feat(router): adaptador — filtro receiving_leads + contador + reclamo"
+git add src/lib/leads/types.ts src/lib/leads/leads.test-helpers.ts src/lib/leads/leads.test.ts src/lib/leads/repository.ts src/lib/leads/ingest.ts
+git commit -m "feat(router): puerto+adaptador+FakeRepo — pool elegible por cupo (derivado)"
 ```
 
 ---
 
-### Task 5: Función de reclamo (`reclaimStaleLeads`)
+### Task 3: `assignFromPool` (DRY) + wire en la ingesta
 
-**Files:**
-- Create: `src/lib/leads/reclaim.ts`
-- Test: `src/lib/leads/reclaim.test.ts`
+**Files:** Create `src/lib/leads/assign.ts`; Modify `src/lib/leads/ingest.ts:104-111`; Test `src/lib/leads/assign.test.ts`
 
-**Interfaces:**
-- Consumes: `repo.listStaleAssignedLeads()`, `repo.unassignDeal()`, `repo.decrementReceivedCount()`, `repo.listAssignableAgents()`, `repo.assignDealIfUnassigned()`, `repo.incrementReceivedCount()`, `pickLeastLoaded()`.
-- Produces: `reclaimStaleLeads(repo): Promise<{ reclaimed: number; reassigned: number }>`.
+**Interfaces — Produces:** `assignFromPool(repo, dealId, excludeUserId?): Promise<string | null>` — lista elegibles (excluyendo `excludeUserId`), elige least-loaded, asigna, registra `lead_assigned`, devuelve el userId asignado o null.
 
-- [ ] **Step 1: Escribir el test (falla)**
+- [ ] **Step 1: Test (falla)**
+
+```typescript
+import { describe, it, expect } from "vitest";
+import { assignFromPool } from "./assign";
+import { FakeRepo } from "./leads.test-helpers";
+
+describe("assignFromPool", () => {
+  it("asigna al least-loaded y registra el evento", async () => {
+    const repo = new FakeRepo();
+    repo.deals.push({ id: "d1" } as never);
+    const who = await assignFromPool(repo, "d1");
+    expect(who).toBe("u1"); // openDeals 0
+    expect(repo.events).toContainEqual({ userId: "u1", dealId: "d1", kind: "lead_assigned" });
+  });
+  it("excluye al asesor indicado (reclamo)", async () => {
+    const repo = new FakeRepo();
+    repo.deals.push({ id: "d2" } as never);
+    const who = await assignFromPool(repo, "d2", "u1");
+    expect(who).toBe("u2");
+  });
+  it("devuelve null si no hay elegibles", async () => {
+    const repo = new FakeRepo();
+    repo.eligible = [];
+    repo.deals.push({ id: "d3" } as never);
+    expect(await assignFromPool(repo, "d3")).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Correr (falla)** — `npx vitest run src/lib/leads/assign.test.ts` → FAIL.
+
+- [ ] **Step 3: Implementar `assign.ts`**
+
+```typescript
+import type { LeadRepository } from "./types";
+import { pickLeastLoaded } from "./ingest";
+
+/** Reparto único (ingesta y reclamo). Asigna el deal al asesor elegible menos
+ *  cargado (excluyendo `excludeUserId`), registra el evento y devuelve su id. */
+export async function assignFromPool(
+  repo: LeadRepository, dealId: string, excludeUserId?: string,
+): Promise<string | null> {
+  const agents = (await repo.listEligibleAgents()).filter((a) => a.userId !== excludeUserId);
+  const pick = pickLeastLoaded(agents);
+  if (!pick) return null;
+  const ok = await repo.assignDealIfUnassigned(dealId, pick.userId);
+  if (!ok) return null;
+  await repo.recordAssignEvent(pick.userId, dealId, "lead_assigned");
+  return pick.userId;
+}
+```
+
+- [ ] **Step 4: Wire en `ingest.ts`** — reemplazar el bloque 104-111 por:
+
+```typescript
+  // 4. Asignación least-loaded (idempotente + registra el evento de tanda).
+  if (opts.autoAssign) {
+    await assignFromPool(repo, dealId);
+  }
+```
+Import: `import { assignFromPool } from "./assign";`. Si quedó un `import { AssignableAgent }` sin uso en ingest.ts, quitarlo. `pickLeastLoaded` sigue exportado (lo usa assign.ts).
+
+- [ ] **Step 5: Correr + typecheck** — `npx vitest run src/lib/leads && npm run typecheck` → PASS.
+- [ ] **Step 6: Commit** `feat(router): assignFromPool (DRY) + wire en la ingesta`
+
+---
+
+### Task 4: Reclamo seguro (`reclaimStaleLeads`) con dry-run
+
+**Files:** Create `src/lib/leads/reclaim.ts`; Test `src/lib/leads/reclaim.test.ts`
+
+**Interfaces — Produces:** `reclaimStaleLeads(repo, opts: { reclaimAfterIso: string; dryRun: boolean }): Promise<{ candidates: number; reclaimed: number; reassigned: number }>`.
+
+- [ ] **Step 1: Test (falla)**
 
 ```typescript
 import { describe, it, expect } from "vitest";
 import { reclaimStaleLeads } from "./reclaim";
-import { FakeRepo } from "./leads.test-helpers"; // ver nota de Step 3
+import { FakeRepo } from "./leads.test-helpers";
+
+const OPTS = { reclaimAfterIso: "2000-01-01T00:00:00Z", dryRun: false };
 
 describe("reclaimStaleLeads", () => {
-  it("devuelve el lead al pozo y lo reasigna a otro, ajustando contadores", async () => {
+  it("dry-run: cuenta candidatos pero NO reasigna", async () => {
     const repo = new FakeRepo();
     repo.deals.push({ id: "d1", assigned: "u1" } as never);
     repo.stale = [{ leadId: "l1", dealId: "d1", assignedAgentId: "u1" }];
-    repo.received.set("u1", 5);
-    // listAssignableAgents del Fake devuelve u1 y u2; excluimos u1 → va a u2.
-    const res = await reclaimStaleLeads(repo);
+    const res = await reclaimStaleLeads(repo, { ...OPTS, dryRun: true });
+    expect(res.candidates).toBe(1);
+    expect(res.reclaimed).toBe(0);
+    expect(repo.deals[0].assigned).toBe("u1"); // intacto
+  });
+  it("reasigna a otro y registra reclaim+assign", async () => {
+    const repo = new FakeRepo();
+    repo.deals.push({ id: "d1", assigned: "u1" } as never);
+    repo.stale = [{ leadId: "l1", dealId: "d1", assignedAgentId: "u1" }];
+    const res = await reclaimStaleLeads(repo, OPTS);
     expect(res.reclaimed).toBe(1);
     expect(res.reassigned).toBe(1);
-    expect(repo.received.get("u1")).toBe(4); // -1 al original
-    expect(repo.received.get("u2")).toBe(1); // +1 al nuevo
-    const d1 = repo.deals.find((d) => d.id === "d1");
-    expect(d1?.assigned).toBe("u2");
+    expect(repo.deals[0].assigned).toBe("u2");
+    expect(repo.events).toContainEqual({ userId: "u1", dealId: "d1", kind: "lead_reclaimed" });
+    expect(repo.events).toContainEqual({ userId: "u2", dealId: "d1", kind: "lead_assigned" });
   });
-
-  it("si no hay otro asesor elegible, deja el lead sin asignar", async () => {
+  it("sin otro elegible: reclama pero queda sin asignar", async () => {
     const repo = new FakeRepo();
     repo.deals.push({ id: "d2", assigned: "u1" } as never);
     repo.stale = [{ leadId: "l2", dealId: "d2", assignedAgentId: "u1" }];
-    repo.received.set("u1", 3);
-    repo.onlyAgent = "u1"; // el Fake devuelve solo u1 como elegible
-    const res = await reclaimStaleLeads(repo);
+    repo.eligible = [{ userId: "u1", openDeals: 0 }]; // solo el original
+    const res = await reclaimStaleLeads(repo, OPTS);
     expect(res.reclaimed).toBe(1);
     expect(res.reassigned).toBe(0);
-    const d2 = repo.deals.find((d) => d.id === "d2");
-    expect(d2?.assigned).toBeUndefined();
+    expect(repo.deals[0].assigned).toBeUndefined();
   });
 });
 ```
 
-- [ ] **Step 2: Correr (debe fallar)**
-
-Run: `npx vitest run src/lib/leads/reclaim.test.ts`
-Expected: FAIL (`reclaim.ts` no existe).
+- [ ] **Step 2: Correr (falla).**
 
 - [ ] **Step 3: Implementar `reclaim.ts`**
 
 ```typescript
-// Reclamo de leads sin trabajar: los devuelve al pozo y los reasigna a otro
-// asesor que reciba, protegiendo la señal de Meta (un lead que nadie trabaja
-// nunca se califica → Meta lo ve como no-conversión).
 import type { LeadRepository } from "./types";
-import { pickLeastLoaded } from "./ingest";
+import { assignFromPool } from "./assign";
 
+/** Devuelve al pozo los leads sin trabajar y los reasigna a otro elegible.
+ *  El contador es derivado, así que el evento lead_reclaimed ya "descuenta"
+ *  al original y lead_assigned "suma" al nuevo (los emite assignFromPool y este). */
 export async function reclaimStaleLeads(
   repo: LeadRepository,
-): Promise<{ reclaimed: number; reassigned: number }> {
-  const stale = await repo.listStaleAssignedLeads();
-  let reclaimed = 0;
-  let reassigned = 0;
+  opts: { reclaimAfterIso: string; dryRun: boolean },
+): Promise<{ candidates: number; reclaimed: number; reassigned: number }> {
+  const stale = await repo.listStaleAssignedLeads(opts.reclaimAfterIso);
+  if (opts.dryRun) return { candidates: stale.length, reclaimed: 0, reassigned: 0 };
 
+  let reclaimed = 0, reassigned = 0;
   for (const s of stale) {
-    // 1. Volver al pozo + descontar del original (lo devolvió).
     await repo.unassignDeal(s.dealId);
-    await repo.decrementReceivedCount(s.assignedAgentId);
+    await repo.recordAssignEvent(s.assignedAgentId, s.dealId, "lead_reclaimed");
     reclaimed++;
-
-    // 2. Reasignar a otro que reciba (excluyendo al original).
-    const agents = (await repo.listAssignableAgents()).filter(
-      (a) => a.userId !== s.assignedAgentId,
-    );
-    const pick = pickLeastLoaded(agents);
-    if (pick) {
-      const ok = await repo.assignDealIfUnassigned(s.dealId, pick.userId);
-      if (ok) {
-        await repo.incrementReceivedCount(pick.userId);
-        reassigned++;
-      }
-    }
-    // Sin otro elegible → queda sin asignar en el pozo (visible "Sin asignar").
+    const who = await assignFromPool(repo, s.dealId, s.assignedAgentId);
+    if (who) reassigned++;
   }
-
-  return { reclaimed, reassigned };
+  return { candidates: stale.length, reclaimed, reassigned };
 }
 ```
 
-Para el test: extraer `FakeRepo` a `src/lib/leads/leads.test-helpers.ts` (export) y reimportarlo desde `leads.test.ts`, o duplicar un fake mínimo en `reclaim.test.ts`. Recomendado: mover `FakeRepo` a `leads.test-helpers.ts` con `export class FakeRepo`, agregar el campo `onlyAgent?: string` y que `listAssignableAgents` respete `onlyAgent` (devuelve solo ese) — así ambos tests lo comparten sin duplicar.
-
-- [ ] **Step 4: Correr (debe pasar)**
-
-Run: `npx vitest run src/lib/leads`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/lib/leads/reclaim.ts src/lib/leads/reclaim.test.ts src/lib/leads/leads.test-helpers.ts src/lib/leads/leads.test.ts
-git commit -m "feat(router): reclaimStaleLeads — devuelve leads sin trabajar al pozo"
-```
+- [ ] **Step 4: Correr + typecheck** → PASS.
+- [ ] **Step 5: Commit** `feat(router): reclaimStaleLeads con dry-run + gate temporal`
 
 ---
 
-### Task 6: Wire del reclamo en el cron `/api/leads/sync`
+### Task 5: Wire del reclamo en el cron (log-only primero)
 
-**Files:**
-- Modify: `src/app/api/leads/sync/route.ts` (junto a `reconcileAllCapi`, ~línea 220)
+**Files:** Modify `src/app/api/leads/sync/route.ts`
 
-**Interfaces:**
-- Consumes: `reclaimStaleLeads`, el adaptador `createLeadRepository` (mismo que usa la ingesta) y `supabaseAdmin`.
-
-- [ ] **Step 1: Leer el route para ubicar el adaptador y el cierre**
-
-Run: `sed -n '1,60p;200,260p' src/app/api/leads/sync/route.ts` (o Read). Identificar cómo se construye el repo por cuenta/fuente y dónde se llama `reconcileAllCapi`.
-
-- [ ] **Step 2: Agregar la pasada de reclamo**
-
-Inmediatamente antes o después de `reconcileAllCapi(admin)`, por cada fuente activa (donde ya se tiene un `repo` construido para esa fuente/pipeline), agregar:
+- [ ] **Step 1:** Import `import { reclaimStaleLeads } from "@/lib/leads/reclaim";`. Definir la constante de gate (fecha de deploy del feature, en UTC) arriba del handler:
 
 ```typescript
-    // Reclamo: leads sin trabajar vuelven al pozo y se reasignan.
-    const reclaim = await reclaimStaleLeads(repo);
-    if (reclaim.reclaimed > 0) {
-      console.log(`[sync] reclamados ${reclaim.reclaimed}, reasignados ${reclaim.reassigned}`);
-    }
+// Reclamo: solo sobre leads creados desde que el feature está vivo (excluye el
+// backlog histórico). Actualizar a la fecha real de deploy.
+const RECLAIM_AFTER_ISO = "2026-07-18T00:00:00Z";
+const RECLAIM_DRY_RUN = true; // ⚠️ arrancar en true; pasar a false tras revisar logs.
 ```
 
-Import al tope: `import { reclaimStaleLeads } from "@/lib/leads/reclaim";`
+- [ ] **Step 2:** Donde ya existe el `repo` por fuente (instanciado con `createLeadRepository(admin, source)`), después de los loops de ingesta y antes/después de `reconcileAllCapi`:
 
-> El `repo` acá es el adaptador real (service-role, ya scopeado a la cuenta+pipeline de la fuente), así que `listStaleAssignedLeads` usa su `STALE_DAYS`/pipeline.
-
-- [ ] **Step 3: Typecheck + build**
-
-Run: `npm run typecheck && npm run build`
-Expected: sin errores.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/app/api/leads/sync/route.ts
-git commit -m "feat(router): correr reclaimStaleLeads en el cron de sync"
+```typescript
+    const reclaim = await reclaimStaleLeads(repo, {
+      reclaimAfterIso: RECLAIM_AFTER_ISO, dryRun: RECLAIM_DRY_RUN,
+    });
+    console.log(`[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} reassigned=${reclaim.reassigned} (dryRun=${RECLAIM_DRY_RUN})`);
 ```
+
+- [ ] **Step 3:** `npm run typecheck && npm run build` → verde.
+- [ ] **Step 4: Commit** `feat(router): correr reclaim en el cron (log-only)`
+- [ ] **Step 5 (post-deploy, MANUAL):** revisar logs 1-2 días; si `candidates` es razonable, cambiar `RECLAIM_DRY_RUN=false` en un commit aparte.
 
 ---
 
-### Task 7: VBO — `custom_data.value = capitas` en CAPI
+### Task 6: VBO — `custom_data.value = capitas` (sin default basura)
 
-**Files:**
-- Modify: `src/lib/leads/capi.ts` (`SendConversionInput`, `buildEventPayload`, `reconcileCapiForAccount`)
-- Test: `src/lib/leads/capi.test.ts` (crear si no existe un bloque de `buildEventPayload`)
+**Files:** Modify `src/lib/leads/capi.ts`; Test `src/lib/leads/capi.test.ts`
 
-**Interfaces:**
-- Consumes: `deals.capitas`, `lead_capi_config.send_value`.
-- Produces: payload con `custom_data: { value, currency }` cuando corresponde.
-
-- [ ] **Step 1: Escribir el test de `buildEventPayload` (falla)**
+- [ ] **Step 1: Test (falla)**
 
 ```typescript
 import { describe, it, expect } from "vitest";
 import { buildEventPayload } from "./capi";
-
-describe("buildEventPayload — value (VBO)", () => {
-  const base = {
-    datasetId: "ds", accessToken: "tok", eventName: "calificado",
-    eventId: "l1:calificado", eventTimeSec: 1000, userData: {}, leadId: "l:5",
-  };
-  it("incluye custom_data.value cuando se pasa value", () => {
-    const p = buildEventPayload({ ...base, value: 4 });
-    expect(p.data[0].custom_data).toEqual({ value: 4, currency: "ARS" });
+const base = { datasetId:"d", accessToken:"t", eventName:"calificado", eventId:"l1:calificado", eventTimeSec:1, userData:{}, leadId:"l:5" };
+describe("buildEventPayload — VBO", () => {
+  it("manda custom_data.value con capitas", () => {
+    expect(buildEventPayload({ ...base, value: 4 }).data[0].custom_data).toEqual({ value: 4, currency: "ARS" });
   });
-  it("omite custom_data cuando value es null/undefined", () => {
-    const p = buildEventPayload(base);
-    expect(p.data[0].custom_data).toBeUndefined();
+  it("SIN custom_data si value es null (nunca sella value=1)", () => {
+    expect(buildEventPayload({ ...base, value: null }).data[0].custom_data).toBeUndefined();
   });
 });
 ```
 
-- [ ] **Step 2: Correr (debe fallar)**
+- [ ] **Step 2: Correr (falla).**
 
-Run: `npx vitest run src/lib/leads/capi.test.ts`
-Expected: FAIL.
-
-- [ ] **Step 3: Implementar en `capi.ts`**
-
-Agregar a `SendConversionInput` (después de `leadId?`):
-
-```typescript
-  /** Valor de conversión (capitas). Si está presente, se manda como
-   *  custom_data.value para optimización por valor (VBO). */
-  value?: number | null;
-```
-
-En `buildEventPayload`, después de armar `user_data` y antes del `return`, construir el evento con `custom_data` condicional:
+- [ ] **Step 3: Implementar** — en `SendConversionInput` agregar `value?: number | null;`. En `buildEventPayload`, armar el evento como objeto y agregar `custom_data` solo si `value != null`:
 
 ```typescript
   const event: Record<string, unknown> = {
-    event_name: input.eventName,
-    event_time: input.eventTimeSec,
-    event_id: input.eventId,
-    action_source: "system_generated",
-    user_data,
+    event_name: input.eventName, event_time: input.eventTimeSec,
+    event_id: input.eventId, action_source: "system_generated", user_data,
   };
-  if (input.value != null) {
-    event.custom_data = { value: input.value, currency: "ARS" };
-  }
+  if (input.value != null) event.custom_data = { value: input.value, currency: "ARS" };
   return { data: [event] };
 ```
 
-- [ ] **Step 4: Pasar el value en `reconcileCapiForAccount`**
-
-Extender la query de deals (líneas 183-187) para traer `capitas`:
-
+- [ ] **Step 4: Pasar el value en `reconcileCapiForAccount`** — traer `capitas`:
 ```typescript
-  const { data: deals } = await admin
-    .from("deals")
-    .select("id, capitas")
-    .eq("account_id", config.account_id)
-    .in("stage_id", stageIds);
-  const dealIds = (deals ?? []).map((d) => d.id as string);
+  const { data: deals } = await admin.from("deals").select("id, capitas")
+    .eq("account_id", config.account_id).in("stage_id", stageIds);
   const capitasByDeal = new Map<string, number | null>(
-    (deals ?? []).map((d) => [d.id as string, (d.capitas as number | null) ?? null]),
-  );
+    (deals ?? []).map((d) => [d.id as string, (d.capitas as number | null) ?? null]));
 ```
-
-Agregar `send_value` al tipo `CapiConfigRow` y al `.select(...)` de `reconcileAllCapi` (línea 290):
-
+Agregar `send_value: boolean` a `CapiConfigRow` y al `.select(...)` de `reconcileAllCapi`. En el `sendConversion({...})`:
 ```typescript
-interface CapiConfigRow {
-  account_id: string; dataset_id: string | null; trigger_stage_name: string;
-  event_name: string; active: boolean; send_value: boolean;
-}
-```
-```typescript
-    .select("account_id, dataset_id, trigger_stage_name, event_name, active, send_value")
+      // Solo eventos de valor (send_value) Y con capitas cargadas. Si null,
+      // NO se manda value (nunca se sella value=1 basura).
+      value: config.send_value ? (capitasByDeal.get(lead.deal_id as string) ?? null) : null,
 ```
 
-En el `sendConversion({...})` dentro del loop, agregar el value (solo si la regla lo pide; default 1 si no hay capitas):
-
-```typescript
-      value: config.send_value ? (capitasByDeal.get(lead.deal_id as string) ?? 1) : null,
-```
-
-- [ ] **Step 5: Correr tests + typecheck**
-
-Run: `npx vitest run src/lib/leads && npm run typecheck`
-Expected: PASS + sin errores de tipo.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/lib/leads/capi.ts src/lib/leads/capi.test.ts
-git commit -m "feat(vbo): mandar custom_data.value=capitas en calificado/closed-won"
-```
+- [ ] **Step 5: Correr + typecheck** → PASS.
+- [ ] **Step 6: Commit** `feat(vbo): custom_data.value=capitas (omite si null; nunca default 1)`
 
 ---
 
-### Task 8: API + UI de recepción en Miembros
+### Task 7: API de miembros (recepción + cupo + recibidos derivado)
 
-**Files:**
-- Modify: `src/app/api/account/members/route.ts` (GET agrega `receiving_leads`, `leads_received_count`)
-- Modify: `src/app/api/account/members/[userId]/route.ts` (PATCH despacha `receiving`; nuevo POST/PATCH para reset)
-- Modify: `src/components/settings/member-access-controls.tsx` (toggle + contador + reset)
-- Modify: `src/components/settings/members-tab.tsx` (Member interface + pasar props)
-- Modify: `src/hooks/use-auth.tsx` (agregar los campos al select/Profile si se usan en cliente — opcional)
+**Files:** Modify `src/app/api/account/members/route.ts` (GET) y `src/app/api/account/members/[userId]/route.ts` (PATCH)
 
-**Interfaces:**
-- Consumes: RPCs `set_member_receiving`, `reset_member_lead_count`.
+- [ ] **Step 1: GET** — agregar al `.select(...)` de profiles: `receiving_leads, lead_cap, receiving_since`. Calcular `received_this_cycle` por miembro (query a activity_log: `lead_assigned − lead_reclaimed` desde `receiving_since`; si no tiene `receiving_since`, 0). Devolver en cada member: `receiving_leads`, `lead_cap`, `received_this_cycle`.
 
-- [ ] **Step 1: GET /api/account/members devuelve los campos**
-
-En `route.ts`, agregar `receiving_leads, leads_received_count` al `.select(...)` de profiles y al `MemberOut` (extendiendo el patrón de `allowed_modules`/`blocked` que ya existe). Devolver `receiving_leads: Boolean(row.receiving_leads)` y `leads_received_count: row.leads_received_count ?? 0`.
-
-- [ ] **Step 2: PATCH despacha `receiving` y `reset`**
-
-En `[userId]/route.ts` PATCH, agregar ramas (junto a las de `allowed_modules`/`blocked`), antes de la de `role`:
-
+- [ ] **Step 2: PATCH** — agregar ramas (junto a `allowed_modules`/`blocked`):
 ```typescript
     if (body && "receiving" in body) {
-      if (typeof body.receiving !== "boolean") {
-        return NextResponse.json({ error: "'receiving' debe ser boolean" }, { status: 400 });
-      }
-      const { error } = await ctx.supabase.rpc("set_member_receiving", {
-        p_user_id: userId, p_receiving: body.receiving,
-      });
+      if (typeof body.receiving !== "boolean") return NextResponse.json({ error: "'receiving' debe ser boolean" }, { status: 400 });
+      const { error } = await ctx.supabase.rpc("set_member_receiving", { p_user_id: userId, p_receiving: body.receiving });
       if (error) return rpcErrorToResponse(error);
       return NextResponse.json({ ok: true });
     }
-    if (body && body.reset_count === true) {
-      const { error } = await ctx.supabase.rpc("reset_member_lead_count", { p_user_id: userId });
+    if (body && "lead_cap" in body) {
+      const cap = body.lead_cap;
+      if (cap !== null && (typeof cap !== "number" || cap < 0)) return NextResponse.json({ error: "'lead_cap' debe ser número ≥ 0 o null" }, { status: 400 });
+      const { error } = await ctx.supabase.rpc("set_member_cap", { p_user_id: userId, p_cap: cap });
+      if (error) return rpcErrorToResponse(error);
+      return NextResponse.json({ ok: true });
+    }
+    if (body && body.reset_cycle === true) {
+      const { error } = await ctx.supabase.rpc("reset_member_cycle", { p_user_id: userId });
       if (error) return rpcErrorToResponse(error);
       return NextResponse.json({ ok: true });
     }
 ```
 
-- [ ] **Step 3: UI en `member-access-controls.tsx`**
-
-Agregar props `receiving: boolean`, `leadsReceived: number`. Agregar un botón toggle "Recibe leads / Pausar recepción" (PATCH `{ receiving: !receiving }`) y un chip `"{leadsReceived} recibidos"` con un botón reset (PATCH `{ reset_count: true }`). Reusar el helper `patch()` que ya existe en el componente y `onUpdated()`.
-
-```tsx
-<Button variant="outline" size="sm" disabled={busy}
-  onClick={async () => { const ok = await patch({ receiving: !receiving });
-    if (ok) toast.success(receiving ? "Recepción pausada" : "Recibiendo leads"); }}
-  className={receiving
-    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-    : "border-border text-muted-foreground"}>
-  {receiving ? "Recibe leads" : "No recibe"}
-</Button>
-<span className="text-xs text-muted-foreground">
-  {leadsReceived} recibidos
-  <button type="button" className="ml-1 underline"
-    onClick={async () => { if (await patch({ reset_count: true })) toast.success("Contador reseteado"); }}>
-    reset
-  </button>
-</span>
-```
-
-- [ ] **Step 4: Pasar props desde `members-tab.tsx`**
-
-Agregar `receiving_leads` y `leads_received_count` a la `Member` interface y pasarlos a `<MemberAccessControls receiving={member.receiving_leads} leadsReceived={member.leads_received_count} ... />`.
-
-- [ ] **Step 5: Typecheck + build + tests**
-
-Run: `npm run typecheck && npm run build && npx vitest run`
-Expected: todo verde.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/app/api/account/members/ src/components/settings/member-access-controls.tsx src/components/settings/members-tab.tsx
-git commit -m "feat(router): UI admin — toggle Recibe leads + contador + reset"
-```
+- [ ] **Step 3:** `npm run typecheck && npm run build` → verde.
+- [ ] **Step 4: Commit** `feat(router): API miembros — recepción/cupo/recibidos derivado`
 
 ---
 
-### Task 9: Captura de capitas al calificar
+### Task 8: UI admin en Miembros (toggle + cupo + recibidos + reset)
 
-**Files:**
-- Modify: `src/components/contacts/contact-detail-view.tsx` (campo capitas en el deal, editable; prompt al mover a "Calificado")
-- Modify: `src/app/(dashboard)/leads/stage-select.tsx` (opcional: prompt de capitas al elegir "Calificado" desde la tabla)
+**Files:** Modify `src/components/settings/member-access-controls.tsx`, `src/components/settings/members-tab.tsx`
 
-**Interfaces:**
-- Consumes: `deals.capitas` (migración 042).
-
-- [ ] **Step 1: Campo capitas editable en el detalle**
-
-En `contact-detail-view.tsx`, agregar un input numérico "Capitas" en la sección del deal, que hace `supabase.from('deals').update({ capitas }).eq('id', primary.id)` (bajo RLS: el asesor puede editar su propio deal; el admin cualquiera). Sembrar el valor actual en el fetch de deals (`select` agrega `capitas`).
-
-- [ ] **Step 2: Prompt al mover a "Calificado"**
-
-En el handler de cambio de etapa (`changeStage`), si la etapa destino se llama "Calificado" y el deal no tiene `capitas`, pedirlo antes de confirmar el movimiento (un `window.prompt` simple para MVP, o un pequeño diálogo). Guardar `capitas` junto con el cambio de etapa. Esto garantiza que el valor esté seteado antes de que el cron (5 min) dispare el evento `calificado`.
-
-> Rationale (del spec): el evento se sella al primer envío; si capitas se carga después del envío, el valor viejo queda en Meta. Por eso se captura en la transición a Calificado.
-
-- [ ] **Step 3: Typecheck + build**
-
-Run: `npm run typecheck && npm run build`
-Expected: sin errores.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/components/contacts/contact-detail-view.tsx src/app/(dashboard)/leads/stage-select.tsx
-git commit -m "feat(vbo): capturar capitas al calificar (alimenta el value CAPI)"
-```
+- [ ] **Step 1:** Agregar props `receiving: boolean`, `leadCap: number | null`, `receivedThisCycle: number`. Renderizar (reusando el helper `patch()` existente):
+  - Toggle "Recibe leads" (PATCH `{ receiving: !receiving }`).
+  - Chip `"{receivedThisCycle}{leadCap != null ? '/'+leadCap : ''} recibidos"` + botón "reset" (PATCH `{ reset_cycle: true }`).
+  - Input numérico de cupo (o "sin límite") que hace PATCH `{ lead_cap: value }` on blur/enter, con validación cliente (entero ≥ 0 o vacío=null).
+- [ ] **Step 2:** En `members-tab.tsx`, agregar `receiving_leads`, `lead_cap`, `received_this_cycle` a la `Member` interface y pasarlos a `<MemberAccessControls .../>`.
+- [ ] **Step 3:** `npm run typecheck && npm run build && npx vitest run` → todo verde.
+- [ ] **Step 4: Commit** `feat(router): UI miembros — recepción + cupo + recibidos`
 
 ---
 
-### Task 10: Verificación en vivo (simulación RLS + smoke)
+### Task 9: Captura de capitas (validada, requisito para Calificado)
 
-**Files:** ninguno (verificación en el scratchpad, patrón del gate anterior).
+**Files:** Modify `src/components/contacts/contact-detail-view.tsx`; `src/app/(dashboard)/leads/stage-select.tsx`
 
-- [ ] **Step 1: RPCs admin-only**
-
-Simular como un `agent` (SET ROLE authenticated + jwt sub) llamando `set_member_receiving` sobre otro → debe fallar `42501`. Como admin → OK. Verificar que activar resetea el contador a 0.
-
-- [ ] **Step 2: Filtro del pool**
-
-Poner `receiving_leads=false` a un comprador y confirmar que `listAssignableAgents` (query equivalente) lo excluye.
-
-- [ ] **Step 3: VBO end-to-end (opcional, con un lead de prueba)**
-
-Setear `deals.capitas=4` en un deal en etapa Calificado, forzar una corrida del cron, y verificar en `lead_capi_events.response` (fbtrace) + `ads_get_dataset_stats` que el evento salió. (El value en Meta no es consultable directo por MCP; el recibo fbtrace confirma el envío.)
-
-- [ ] **Step 4:** Dejar todo revertido (contadores/flags de prueba a su estado real).
+- [ ] **Step 1:** Campo numérico "Capitas" en la sección del deal (input `min=1 max=20 step=1`), que valida y hace `supabase.from('deals').update({ capitas }).eq('id', primary.id)`. Sembrar el valor actual en el fetch de deals (`select` agrega `capitas`).
+- [ ] **Step 2:** En el handler de cambio de etapa (contact-detail-view `changeStage` y `stage-select.tsx`), si la etapa destino es "Calificado" (nombre exacto del Task 0) y el deal no tiene `capitas` válida (1–20), **bloquear el cambio** con un aviso ("Cargá las capitas antes de calificar") — un diálogo/campo inline, NO `window.prompt`. Recién con capitas válida se confirma el movimiento. Esto garantiza que el value esté antes de que el cron selle el evento.
+- [ ] **Step 3:** `npm run typecheck && npm run build` → verde.
+- [ ] **Step 4: Commit** `feat(vbo): capturar capitas validada; requisito para Calificado`
 
 ---
 
-## Self-Review (cobertura del spec)
+### Task 10: Verificación en vivo (RLS + smoke)
 
-- **Pozo + filtro receiving_leads:** Task 1 (columna) + Task 4 (filtro) + Task 3 (contador). ✔
-- **pickLeastLoaded sobre el pool:** reusa el existente; el filtro entra en Task 4. ✔
-- **Cupo manual + reset:** Task 1 (RPCs) + Task 8 (UI). ✔
-- **Reclamo:** Task 2 (puerto) + Task 4 (query) + Task 5 (lógica) + Task 6 (wire cron). ✔
-- **VBO capitas:** Task 1 (columna + send_value) + Task 7 (CAPI) + Task 9 (captura). ✔
-- **RLS/seguridad:** RPCs admin-only (Task 1), verificación (Task 10). ✔
-- **Prerrequisito autoAssign:** Task 0. ✔
-- **Fuera de alcance** (precio ARS, corrección post-envío, SP3, config Meta): no hay tareas — correcto.
+- [ ] **RPCs admin-only:** simular como `agent` (SET ROLE authenticated + jwt sub) → `set_member_receiving`/`set_member_cap`/`reset_member_cycle` sobre otro fallan `42501`; como admin OK.
+- [ ] **Pool + cupo:** poner `lead_cap` bajo a un comprador, insertar N eventos `lead_assigned` de prueba en activity_log, confirmar que `listEligibleAgents` (query equivalente) lo excluye al llegar al cupo. Limpiar los eventos de prueba.
+- [ ] **Reclaim gate:** confirmar que un deal viejo (`created_at < RECLAIM_AFTER_ISO`) NO aparece en `listStaleAssignedLeads`.
+- [ ] **VBO:** setear `deals.capitas=4` en un deal en Calificado, forzar cron, verificar `lead_capi_events.response` (fbtrace) + `ads_get_dataset_stats`. Con capitas null → confirmar que el evento sale SIN value.
+- [ ] **Revertir** todos los datos de prueba.
 
-**Riesgos anotados (para el council):**
-- Contador `increment/decrement` es read-then-write (no atómico) — service-role, baja concurrencia del cron; drift improbable pero posible. ¿Vale una RPC atómica?
-- "Trabajado" = "tiene una nota" es un proxy; un asesor que trabaja por WhatsApp sin dejar nota podría perder el lead por reclamo. ¿Sumar la traza de click-to-chat / cambio de etapa?
-- El value se sella al primer envío de `calificado`; capitas cargadas tarde no corrigen Meta (v2).
-- `listStaleAssignedLeads` hace N+1 (una query de notas por deal candidato) — ok para volumen de cuarentena, revisar si escala.
+---
+
+## Self-Review (cobertura vs spec + revisiones)
+
+- **R1 contador derivado:** Task 1 (receiving_since, sin columna de contador) + Task 2 (listEligibleAgents deriva) + Task 7 (GET deriva received_this_cycle). ✔
+- **R2 cupo + auto-apagado:** Task 1 (lead_cap + set_member_cap) + Task 2 (filtro) + Task 8 (UI). ✔
+- **R3 assignFromPool único:** Task 3 (ingesta) + Task 4 (reclamo lo reusa). ✔
+- **R4 reclamo seguro:** Task 2 (gate reclaimAfter + worked-vía-activity_log + batch) + Task 4 (dry-run) + Task 5 (log-only primero). ✔
+- **R5 capitas validada + sin default 1:** Task 6 (omite value si null) + Task 9 (campo validado + requisito). ✔
+- **R6 commit atómico + build-gate:** Task 2 atómica; build-gate en cada tarea. ✔
+- **Diferido** (tablero/velocidad/valor-adset/tie-breaker): sin tareas — correcto; la base (eventos) queda en Task 2/3/4.
+
+**Riesgos residuales anotados:**
+- El derivado de `received_this_cycle` hace 2 counts a activity_log por asesor con cupo (pocos asesores → ok).
+- `listStaleAssignedLeads` hace 1 count de actividad por candidato (batch=50 acota el N+1).
+- `value=capitas` con `currency:'ARS'` es señal relativa, no pesos (aceptado; documentado).
+- El gate `RECLAIM_AFTER_ISO` es una constante — recordar setearla a la fecha real de deploy.

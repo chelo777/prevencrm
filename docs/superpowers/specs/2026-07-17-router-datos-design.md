@@ -1,6 +1,10 @@
 # Router de datos + VBO por capitas (MVP) — diseño
 
-**Fecha:** 2026-07-17 · **Estado:** diseño aprobado (router + reclamo + VBO), pendiente review del usuario · **Migración:** 042
+**Fecha:** 2026-07-17 · **Estado:** aprobado + **revisado por council (ver "Revisiones post-council" al final — VINCULANTE)** · **Migración:** 042
+
+> ⚠️ La sección **"Revisiones post-council"** al final OVERRIDEA varias decisiones de
+> abajo (contador derivado, cupo con auto-apagado, seguridad del reclamo, captura de
+> capitas, orden de commits). El plan de implementación sigue esas revisiones.
 
 ## Objetivo
 
@@ -179,3 +183,62 @@ El incremento/decremento del contador lo hace el router con **service-role**
   MVP lo requiere. Hoy 621 leads están en marcelo y 4 en alecita — verificar si es
   por autoAssign con un solo comprador o por asignación directa.
 - Apuntar `meta_form_ids` al formulario global (deja de filtrar por el piloto).
+
+---
+
+## Revisiones post-council (VINCULANTE — override lo de arriba)
+
+Tras correr el plan por el LLM council (transcript:
+`docs/superpowers/council/council-transcript-2026-07-17-plan-router.md`).
+
+### R1 — Contador DERIVADO, no columna mutable
+Se elimina `profiles.leads_received_count`. "Recibidos en la tanda actual" se **deriva**
+de eventos con timestamp en `activity_log` (append-only, ya existe):
+- Router auto-asigna → `activity_log` action `lead_assigned` (user_id = asesor receptor).
+- Reclamo: al original → `lead_reclaimed`; al nuevo asesor → `lead_assigned`.
+- **recibidos_tanda(asesor)** = `count(lead_assigned) - count(lead_reclaimed)` desde
+  `profiles.receiving_since`.
+- Se agrega `profiles.receiving_since TIMESTAMPTZ`. Reactivar/reset = `receiving_since = now()`
+  (NO destructivo: la serie histórica queda en activity_log). Elimina el bug de atomicidad,
+  el drift y la pérdida de historial. (Mata las tareas de increment/decrement.)
+
+### R2 — Cupo configurable con auto-apagado (decisión del usuario)
+Se agrega `profiles.lead_cap INTEGER` (nullable = sin límite). El pool elegible es:
+`is_lead_buyer AND receiving_leads AND NOT blocked AND (lead_cap IS NULL OR recibidos_tanda < lead_cap)`.
+El auto-apagado es **implícito en el filtro** (al llegar al cupo, sale solo de la fila; no
+hace falta que el admin apague). El toggle manual `receiving_leads` se mantiene para
+prender/apagar a mano.
+
+### R3 — Un solo `assignLead(pool)` (DRY)
+El reparto es una función pura `assignLead(agents)` (= el `pickLeastLoaded` actual) usada
+por la ingesta Y por el reclamo. Reclamo = `unassignDeal` + `assignLead(pool sin el original)`.
+No hay dos implementaciones de la misma regla.
+
+### R4 — Seguridad del reclamo (evita el desastre día 1 sobre los 621 viejos)
+- **Gate temporal:** solo reclama deals con `created_at > reclaim_after` (constante =
+  fecha de deploy del feature; los 621 históricos quedan excluidos).
+- **Dry-run primero:** el reclamo arranca en modo **log-only** (cuenta y loguea, no reasigna)
+  hasta confirmar en logs que los candidatos son razonables; recién ahí se activa.
+- **"Trabajado" real vía activity_log:** un lead está trabajado si hay CUALQUIER evento en
+  activity_log para su deal después de la asignación (nota, cambio de etapa, contacto), no
+  solo "tiene nota". Menos falsos positivos que castigan al que trabaja sin anotar.
+- **Batch limit** por corrida para no disparar N+1 masivo.
+
+### R5 — Capitas: campo validado, capturado ANTES de sellar
+`deals.capitas` es un entero validado (rango 1–20). Se captura con un **campo/diálogo real
+con validación** (no `window.prompt`), y es **requisito para mover el deal a "Calificado"**
+(se bloquea el cambio de etapa sin capitas). En el reconcile CAPI: si `capitas` es null →
+**NO se manda `custom_data.value`** (el evento va sin valor; nunca se sella `value=1`
+basura). Nota: `currency` queda como unidad nominal; el value es una señal relativa (capitas),
+no pesos.
+
+### R6 — Orden de commits (evita romper prod con Dokploy)
+El puerto `LeadRepository`, el `FakeRepo` y el adaptador `repository.ts` se cambian en **un
+commit atómico** (nunca el puerto sin el adaptador → typecheck/build rojo = deploy roto).
+**Regla:** `npm run build` en verde antes de cada push a main (o feature branch + merge en
+verde). El gate real es build, no Vitest (FakeRepo da falso verde).
+
+### Diferido explícito (fast-follow, NO en este MVP)
+Tablero admin ordenado por carga; velocidad de primer contacto; tasa de calificación/desperdicio
+por asesor; valor real por adset (guardar adset_id con el value); tie-breaker meritocrático en
+el reparto. **La base (eventos con timestamp) SÍ se persiste ahora** (R1) para no perder la serie.
