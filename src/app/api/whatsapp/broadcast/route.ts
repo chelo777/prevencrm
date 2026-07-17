@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
@@ -134,7 +135,9 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: config, error: configError } = await supabase
+    // Service-role: SELECT de whatsapp_config es admin-only (037) pero
+    // difundir es agent+ (leer-credencial vs disparar-envío).
+    const { data: config, error: configError } = await supabaseAdmin()
       .from('whatsapp_config')
       .select('*')
       .eq('account_id', accountId)

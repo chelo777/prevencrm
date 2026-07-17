@@ -116,13 +116,21 @@ export async function getCurrentAccount(): Promise<AccountContext> {
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("account_id, account_role")
+    .select("account_id, account_role, blocked")
     .eq("user_id", user.id)
     .maybeSingle();
 
   if (error) {
     console.error("[getCurrentAccount] profile fetch error:", error);
     throw new ForbiddenError("Could not load account context");
+  }
+  // Acceso pausado. El corte real vive acá (capa API) además de la RLS
+  // (041 excluye bloqueados de is_account_member): una sesión que sigue
+  // técnicamente válida no puede resolver contexto de cuenta, así que
+  // ninguna ruta que use getCurrentAccount/requireRole opera. No es solo
+  // UX — es el enforcement server-side que faltaba.
+  if (data?.blocked) {
+    throw new ForbiddenError("Tu acceso está en pausa");
   }
   if (!data || !data.account_id || !data.account_role) {
     // Pre-migration profile, or a manual insert that skipped the

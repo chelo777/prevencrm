@@ -124,14 +124,32 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => supabaseMock),
 }))
 
+// El core de envío lee whatsapp_config con service-role (separar
+// leer-credencial de disparar-envío; SELECT es admin-only tras 037). El
+// mock del admin client debe devolver la config para whatsapp_config.
 vi.mock('@/lib/flows/admin-client', () => ({
   supabaseAdmin: () => ({
-    from: () => {
+    from: (table: string) => {
+      const result =
+        table === 'whatsapp_config'
+          ? {
+              data: {
+                id: 'cfg-1',
+                account_id: 'acct-1',
+                phone_number_id: 'PNID-1',
+                access_token: 'enc-token',
+              },
+              error: null,
+            }
+          : { data: null, error: null }
       const b: Record<string, unknown> = {}
       const chain = () => b
-      for (const m of ['update', 'eq', 'select']) b[m] = vi.fn(chain)
-      b.then = (resolve: (v: unknown) => unknown) =>
-        resolve({ data: null, error: null })
+      for (const m of ['update', 'eq', 'select', 'insert', 'delete']) {
+        b[m] = vi.fn(chain)
+      }
+      b.single = vi.fn(async () => result)
+      b.maybeSingle = vi.fn(async () => result)
+      b.then = (resolve: (v: unknown) => unknown) => resolve(result)
       return b
     },
   }),

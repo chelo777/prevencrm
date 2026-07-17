@@ -219,8 +219,14 @@ export async function sendMessageToConversation(
     );
   }
 
-  // WhatsApp config, account-scoped.
-  const { data: config, error: configError } = await db
+  // WhatsApp config, account-scoped. Se lee con service-role a propósito:
+  // el SELECT de whatsapp_config es admin-only (037), pero ENVIAR es
+  // capacidad de agent+. Separamos "leer credenciales" (server, elevado)
+  // de "disparar envío" (rol del caller ya validado por la ruta). La
+  // asesora nunca ve el token; solo se usa para hablarle a Meta. accountId
+  // ya está validado como la cuenta del caller aguas arriba.
+  const admin = supabaseAdmin();
+  const { data: config, error: configError } = await admin
     .from('whatsapp_config')
     .select('*')
     .eq('account_id', accountId)
@@ -238,7 +244,7 @@ export async function sendMessageToConversation(
 
   // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
   if (isLegacyFormat(config.access_token)) {
-    void db
+    void admin
       .from('whatsapp_config')
       .update({ access_token: encrypt(accessToken) })
       .eq('id', config.id)

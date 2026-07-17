@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
 import { getTemplate } from '@/lib/automations/templates'
 import { insertSteps, type BuilderStepInput } from '@/lib/automations/steps-tree'
@@ -24,6 +25,12 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Estas rutas escriben con service-role (bypass RLS). El muro NO es RLS
+  // acá: es este requireRole. Sin él, un viewer creaba automations
+  // (side-effecting: mandan WhatsApp, mueven deals). También corta a los
+  // bloqueados (getCurrentAccount lanza).
+  try { await requireRole('agent') } catch (err) { return toErrorResponse(err) }
+
   const supabase = await createClient()
   const {
     data: { user },

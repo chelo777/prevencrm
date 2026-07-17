@@ -20,6 +20,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
+import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -111,7 +112,10 @@ export async function createBroadcast(
 
   // Config (fail fast + provides the audit trail owner already resolved
   // by the caller). Meta send needs phone_number_id + decrypted token.
-  const { data: config, error: configError } = await db
+  // Se lee con service-role: whatsapp_config es admin-only en SELECT (037),
+  // pero difundir es agent+. Separamos leer-credencial de disparar-envío;
+  // accountId ya viene validado como la cuenta del caller.
+  const { data: config, error: configError } = await supabaseAdmin()
     .from('whatsapp_config')
     .select('*')
     .eq('account_id', accountId)

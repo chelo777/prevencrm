@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
 
@@ -45,6 +46,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Ruta service-role (bypass RLS): requireRole ES el muro. Corta viewers
+  // y bloqueados que RLS no frenaría porque el admin client la saltea.
+  try { await requireRole('agent') } catch (err) { return toErrorResponse(err) }
+
   const guard = await requireUser()
   if (!guard.ok) {
     return NextResponse.json(guard.body, { status: guard.status })
