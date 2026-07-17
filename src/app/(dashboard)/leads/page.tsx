@@ -7,6 +7,7 @@ import { LeadFilters } from "./filters";
 import { StageSelect, type StageOption } from "./stage-select";
 import { LeadDetailProvider } from "./lead-detail-provider";
 import { LeadNameCell } from "./lead-name-cell";
+import { AssigneeSelect, type Asesora } from "./assignee-select";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,7 @@ interface LeadRow {
   deal: {
     id: string;
     stage_id: string;
+    assigned_agent_id: string | null;
   } | null;
 }
 
@@ -86,13 +88,20 @@ export default async function LeadsPage({ searchParams }: PageProps) {
 
   // Administrar fuentes es solo admin+. Para una asesora (agent) ocultamos
   // el botón Fuentes, el aviso de cuarentena y el link del estado vacío.
-  const canManageSources = hasMinRole(role, "admin");
+  // El mismo umbral habilita ver/gestionar la asignación de cada lead.
+  const isAdmin = hasMinRole(role, "admin");
+  const canManageSources = isAdmin;
 
   const stageFilter =
     typeof params.etapa === "string" && params.etapa ? params.etapa : null;
   const tagFilter =
     typeof params.etiqueta === "string" && params.etiqueta
       ? params.etiqueta
+      : null;
+  // Filtro por asesora (solo admin). "none" = leads sin asignar.
+  const asesoraFilter =
+    isAdmin && typeof params.asesora === "string" && params.asesora
+      ? params.asesora
       : null;
   const pageNum = Math.max(
     1,
@@ -123,15 +132,37 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     .map((s) => ({ id: s.id, name: s.name, color: s.color }));
   const tagOptions = (tagRows ?? []).map((t) => ({ id: t.id, name: t.name }));
 
+  // Asesoras compradoras (is_lead_buyer) — solo para admin: alimentan la
+  // columna "Asignada a", el filtro y el selector de reasignación inline.
+  const asesoras: Asesora[] = isAdmin
+    ? (
+        (
+          await supabase
+            .from("profiles")
+            .select("user_id, full_name")
+            .eq("account_id", accountId)
+            .eq("is_lead_buyer", true)
+            .order("full_name")
+        ).data ?? []
+      ).map((a) => ({
+        user_id: a.user_id as string,
+        full_name: (a.full_name as string | null) ?? null,
+      }))
+    : [];
+  const asesoraName = new Map(
+    asesoras.map((a) => [a.user_id, a.full_name || a.user_id.slice(0, 8)]),
+  );
+
   // El embed de contact_tags(tags(*)) trae SIEMPRE el set completo de
   // etiquetas para mostrar; `tag_filter` es un inner join aparte usado
   // solo como WHERE (mismo patrón que /api/v1/contacts).
   const contactEmbed = tagFilter
     ? "contact:contacts!inner(id, name, phone, contact_tags(tags(id, name, color)), tag_filter:contact_tags!inner(tag_id))"
     : "contact:contacts(id, name, phone, contact_tags(tags(id, name, color)))";
-  const dealEmbed = stageFilter
-    ? "deal:deals!inner(id, stage_id)"
-    : "deal:deals(id, stage_id)";
+  const needInnerDeal = Boolean(stageFilter || asesoraFilter);
+  const dealEmbed = needInnerDeal
+    ? "deal:deals!inner(id, stage_id, assigned_agent_id)"
+    : "deal:deals(id, stage_id, assigned_agent_id)";
 
   let query = supabase
     .from("leads")
@@ -142,6 +173,10 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     .eq("account_id", accountId);
   if (stageFilter) query = query.eq("deal.stage_id", stageFilter);
   if (tagFilter) query = query.eq("contact.tag_filter.tag_id", tagFilter);
+  if (asesoraFilter === "none")
+    query = query.is("deal.assigned_agent_id", null);
+  else if (asesoraFilter)
+    query = query.eq("deal.assigned_agent_id", asesoraFilter);
 
   const { data: leads, count } = await query
     .order("created_at", { ascending: false })
@@ -172,7 +207,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   const rows = (leads ?? []) as unknown as LeadRow[];
   const total = count ?? rows.length;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const hasFilters = Boolean(stageFilter || tagFilter);
+  const hasFilters = Boolean(stageFilter || tagFilter || asesoraFilter);
 
   function pageHref(n: number): string {
     const sp = new URLSearchParams();
@@ -205,7 +240,14 @@ export default async function LeadsPage({ searchParams }: PageProps) {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <LeadFilters stages={stages} tags={tagOptions} />
+        <LeadFilters
+          stages={stages}
+          tags={tagOptions}
+          asesoras={asesoras.map((a) => ({
+            id: a.user_id,
+            name: a.full_name || a.user_id.slice(0, 8),
+          }))}
+        />
         <span className="text-sm text-muted-foreground">
           {total} lead{total === 1 ? "" : "s"}
           {hasFilters ? " con estos filtros" : ""}
@@ -235,6 +277,11 @@ export default async function LeadsPage({ searchParams }: PageProps) {
               <th className="hidden px-4 py-3 font-medium lg:table-cell">
                 Campaña
               </th>
+              {isAdmin && (
+                <th className="hidden px-4 py-3 font-medium sm:table-cell">
+                  Asignada a
+                </th>
+              )}
               <th className="hidden px-4 py-3 font-medium md:table-cell">
                 Ingresó
               </th>
@@ -246,7 +293,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
+                <td colSpan={isAdmin ? 7 : 6} className="px-4 py-10 text-center text-muted-foreground">
                   {hasFilters ? (
                     <>Ningún lead coincide con los filtros.</>
                   ) : canManageSources ? (
@@ -303,6 +350,20 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                     <td className="hidden px-4 py-3 text-muted-foreground lg:table-cell">
                       {lead.campaign_name || lead.form_name || "—"}
                     </td>
+                    {isAdmin && (
+                      <td className="hidden px-4 py-3 sm:table-cell">
+                        {lead.deal ? (
+                          <AssigneeSelect
+                            dealId={lead.deal.id}
+                            accountId={accountId}
+                            initialAgentId={lead.deal.assigned_agent_id}
+                            asesoras={asesoras}
+                          />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="hidden px-4 py-3 text-muted-foreground md:table-cell">
                       {fmtDate(lead.created_at)}
                     </td>

@@ -14,9 +14,13 @@ interface Option {
 export function LeadFilters({
   stages,
   tags,
+  asesoras = [],
 }: {
   stages: Option[];
   tags: Option[];
+  // Solo lo pasa el admin: habilita el filtro por asesora. Vacío = no se
+  // renderiza (una agente no filtra por asignación).
+  asesoras?: Option[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -24,6 +28,7 @@ export function LeadFilters({
 
   const etapa = searchParams.get("etapa") ?? "";
   const etiqueta = searchParams.get("etiqueta") ?? "";
+  const asesora = searchParams.get("asesora") ?? "";
 
   function push(mutate: (params: URLSearchParams) => void) {
     const params = new URLSearchParams(searchParams.toString());
@@ -33,7 +38,7 @@ export function LeadFilters({
     router.push(qs ? `${pathname}?${qs}` : pathname);
   }
 
-  function apply(key: "etapa" | "etiqueta", value: string) {
+  function apply(key: "etapa" | "etiqueta" | "asesora", value: string) {
     push((params) => {
       if (value) params.set(key, value);
       else params.delete(key);
@@ -73,13 +78,30 @@ export function LeadFilters({
           ))}
         </select>
       )}
-      {(etapa || etiqueta) && (
+      {asesoras.length > 0 && (
+        <select
+          aria-label="Filtrar por asesora"
+          value={asesora}
+          onChange={(e) => apply("asesora", e.target.value)}
+          className={selectClass}
+        >
+          <option value="">Todas las asesoras</option>
+          <option value="none">Sin asignar</option>
+          {asesoras.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+      )}
+      {(etapa || etiqueta || asesora) && (
         <button
           type="button"
           onClick={() =>
             push((params) => {
               params.delete("etapa");
               params.delete("etiqueta");
+              params.delete("asesora");
             })
           }
           className="text-sm text-muted-foreground underline hover:text-foreground"
