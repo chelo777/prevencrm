@@ -564,7 +564,7 @@ export function ContactDetailView({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="bg-popover border-border text-popover-foreground sm:max-w-lg w-full p-0"
+        className="bg-popover border-border text-popover-foreground p-0 gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl"
       >
         {loading || !contact ? (
           <div className="flex items-center justify-center h-full">
@@ -690,7 +690,7 @@ export function ContactDetailView({
               defaultValue={defaultTab}
               className="flex-1 flex flex-col min-h-0"
             >
-              <TabsList className="bg-muted/50 border-b border-border mx-4 mt-3">
+              <TabsList className="bg-muted/50 border-b border-border mx-4 mt-3 max-w-[calc(100%-2rem)] justify-start overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0">
                 <TabsTrigger
                   value="form"
                   className="data-active:bg-muted data-active:text-primary text-muted-foreground"
