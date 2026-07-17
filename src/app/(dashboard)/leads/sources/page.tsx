@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { getCurrentAccount } from "@/lib/auth/account";
+import { hasMinRole } from "@/lib/auth/roles";
 import { NewSourceForm } from "./new-source-form";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +25,14 @@ function fmt(iso: string | null): string {
 }
 
 export default async function LeadSourcesPage() {
-  const { supabase, accountId } = await getCurrentAccount();
+  const { supabase, accountId, role } = await getCurrentAccount();
+
+  // Administrar fuentes es solo admin+. Una asesora (agent) que llegue
+  // por URL directa se va a /leads. La API de fuentes ya exige admin;
+  // esto cierra también la puerta de la UI.
+  if (!hasMinRole(role, "admin")) {
+    redirect("/leads");
+  }
 
   const { data: sources } = await supabase
     .from("lead_sources")

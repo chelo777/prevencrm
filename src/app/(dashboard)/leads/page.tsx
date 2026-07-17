@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AlertTriangle, Settings2 } from "lucide-react";
 import { getCurrentAccount } from "@/lib/auth/account";
+import { hasMinRole } from "@/lib/auth/roles";
 import { WhatsAppButton } from "./whatsapp-button";
 import { LeadFilters } from "./filters";
 import { StageSelect, type StageOption } from "./stage-select";
@@ -80,8 +81,12 @@ interface PageProps {
 }
 
 export default async function LeadsPage({ searchParams }: PageProps) {
-  const { supabase, accountId } = await getCurrentAccount();
+  const { supabase, accountId, role } = await getCurrentAccount();
   const params = await searchParams;
+
+  // Administrar fuentes es solo admin+. Para una asesora (agent) ocultamos
+  // el botón Fuentes, el aviso de cuarentena y el link del estado vacío.
+  const canManageSources = hasMinRole(role, "admin");
 
   const stageFilter =
     typeof params.etapa === "string" && params.etapa ? params.etapa : null;
@@ -188,13 +193,15 @@ export default async function LeadsPage({ searchParams }: PageProps) {
             Leads entrantes de Meta Lead Ads.
           </p>
         </div>
-        <Link
-          href="/leads/sources"
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-muted"
-        >
-          <Settings2 className="h-4 w-4" />
-          Fuentes
-        </Link>
+        {canManageSources && (
+          <Link
+            href="/leads/sources"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-muted"
+          >
+            <Settings2 className="h-4 w-4" />
+            Fuentes
+          </Link>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -205,7 +212,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
         </span>
       </div>
 
-      {quarantineCount ? (
+      {canManageSources && quarantineCount ? (
         <Link
           href="/leads/sources"
           className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-300"
@@ -242,7 +249,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                 <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
                   {hasFilters ? (
                     <>Ningún lead coincide con los filtros.</>
-                  ) : (
+                  ) : canManageSources ? (
                     <>
                       Todavía no hay leads. Dá de alta una{" "}
                       <Link href="/leads/sources" className="text-primary underline">
@@ -250,6 +257,8 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                       </Link>{" "}
                       y esperá el próximo ciclo de sincronización.
                     </>
+                  ) : (
+                    <>Todavía no tenés leads asignados.</>
                   )}
                 </td>
               </tr>
