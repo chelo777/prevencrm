@@ -29,7 +29,7 @@ export async function GET(
   const { slug } = await params;
   const asesora = ASESORAS[slug.trim().toLowerCase()];
   if (!asesora) {
-    return new NextResponse("Asesora no encontrada", { status: 404 });
+    return new NextResponse("Asesor no encontrado", { status: 404 });
   }
   const text = encodeURIComponent(asesora.mensaje ?? MENSAJE_DEFAULT);
   const url = `https://api.whatsapp.com/send?phone=${asesora.phone}&text=${text}`;

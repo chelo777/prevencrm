@@ -80,12 +80,12 @@ export function LeadFilters({
       )}
       {asesoras.length > 0 && (
         <select
-          aria-label="Filtrar por asesora"
+          aria-label="Filtrar por asesor"
           value={asesora}
           onChange={(e) => apply("asesora", e.target.value)}
           className={selectClass}
         >
-          <option value="">Todas las asesoras</option>
+          <option value="">Todos los asesores</option>
           <option value="none">Sin asignar</option>
           {asesoras.map((a) => (
             <option key={a.id} value={a.id}>

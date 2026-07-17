@@ -279,7 +279,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
               </th>
               {isAdmin && (
                 <th className="hidden px-4 py-3 font-medium sm:table-cell">
-                  Asignada a
+                  Asignado a
                 </th>
               )}
               <th className="hidden px-4 py-3 font-medium md:table-cell">

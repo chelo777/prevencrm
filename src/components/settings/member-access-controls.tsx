@@ -132,7 +132,7 @@ export function MemberAccessControls({
         <DialogContent className="bg-popover border-border sm:max-w-sm">
           <DialogHeader>
             <DialogTitle className="text-popover-foreground">
-              Módulos de {name || "la asesora"}
+              Módulos de {name || "el asesor"}
             </DialogTitle>
             <DialogDescription className="text-muted-foreground">
               Tocá para mostrar u ocultar cada módulo. Los que no ve quedan
