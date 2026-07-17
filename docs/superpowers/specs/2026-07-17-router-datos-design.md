@@ -219,9 +219,13 @@ No hay dos implementaciones de la misma regla.
   fecha de deploy del feature; los 621 históricos quedan excluidos).
 - **Dry-run primero:** el reclamo arranca en modo **log-only** (cuenta y loguea, no reasigna)
   hasta confirmar en logs que los candidatos son razonables; recién ahí se activa.
-- **"Trabajado" real vía activity_log:** un lead está trabajado si hay CUALQUIER evento en
-  activity_log para su deal después de la asignación (nota, cambio de etapa, contacto), no
-  solo "tiene nota". Menos falsos positivos que castigan al que trabaja sin anotar.
+- **"Trabajado" real (corregido en implementación):** el activity_log NO sirve como señal
+  porque la propia auto-asignación registra `lead_assigned` ahí → todo lead figuraría
+  trabajado al instante. Las notas manuales Y el click-to-chat (`/api/leads/contacted`) van
+  a **`contact_notes`**. La ingesta agrega su nota de "Comentarios" ANTES de crear el deal.
+  Por eso "trabajado" = existe un `contact_notes` del contacto del deal con
+  `created_at > deals.created_at` (captura nota manual + click-to-chat, excluye la nota de
+  ingesta). El cambio de etapa ya está cubierto por la condición `stage = etapa inicial`.
 - **Batch limit** por corrida para no disparar N+1 masivo.
 
 ### R5 — Capitas: campo validado, capturado ANTES de sellar
