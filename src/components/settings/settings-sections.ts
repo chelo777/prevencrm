@@ -35,12 +35,14 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const DEFAULT_SECTION: SettingsSection = 'overview';
 
-/** Rail grouping. `adminOnly` items are hidden for non-admins. */
+/** Rail grouping. `adminOnly` items se ocultan a los no-admin (agent/viewer). */
 export interface SectionMeta {
   id: SettingsSection;
   label: string;
   icon: LucideIcon;
   group: 'top' | 'account' | 'workspace';
+  /** Solo admin+. El rail lo esconde y la página lo redirige al Resumen. */
+  adminOnly?: boolean;
 }
 
 export const SECTION_META: Record<SettingsSection, SectionMeta> = {
@@ -51,7 +53,8 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
   templates: { id: 'templates', label: 'Plantillas', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Campos y etiquetas', icon: Tags, group: 'workspace' },
-  members: { id: 'members', label: 'Miembros del equipo', icon: UsersRound, group: 'workspace' },
+  // Miembros: solo admin — un agente no debe ver quiénes compran datos.
+  members: { id: 'members', label: 'Miembros del equipo', icon: UsersRound, group: 'workspace', adminOnly: true },
   api: { id: 'api', label: 'Claves de API', icon: KeyRound, group: 'workspace' },
 };
 

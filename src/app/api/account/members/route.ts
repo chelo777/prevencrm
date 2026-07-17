@@ -1,20 +1,15 @@
 // ============================================================
 // GET /api/account/members
 //
-// Lists every member of the caller's account. Any member can call
-// it (the Members tab is shown to admins+, but agents/viewers see
-// a read-only roster too).
-//
-// Field visibility
-//   Sensitive fields (email) are returned only when the caller is
-//   admin+. Agents and viewers see name + avatar + role + joined
-//   date only. This mirrors the design decision from the planning
-//   phase: "agent/viewer sees names only".
+// ADMIN+ ONLY. Devuelve el roster del equipo. Un agent/viewer NO debe
+// saber quiénes son sus compañeros (compradores de datos), así que el
+// endpoint entero es admin — no solo el tab de la UI (si no, un agente
+// podría leer el roster por la API directamente).
 // ============================================================
 
 import { NextResponse } from "next/server";
 
-import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
+import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
 import type { AccountMember } from "@/types";
 
@@ -48,7 +43,7 @@ type MemberOut = AccountMember & {
 
 export async function GET() {
   try {
-    const ctx = await getCurrentAccount();
+    const ctx = await requireRole("admin");
 
     // RLS on profiles allows reading any row whose account matches
     // the caller's, so this query is naturally account-scoped.

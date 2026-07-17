@@ -16,19 +16,28 @@ import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import {
   resolveSection,
+  SECTION_META,
   type SettingsSection,
 } from '@/components/settings/settings-sections';
+import { useAuth } from '@/hooks/use-auth';
+import { hasMinRole } from '@/lib/auth/roles';
 
 export default function SettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { mode } = useTheme();
+  const { accountRole } = useAuth();
+  const isAdmin = hasMinRole(accountRole ?? 'viewer', 'admin');
 
   // The URL (`?tab=`) is the single source of truth for the active
   // section — deep-linkable, and it keeps the existing links in the
   // app sidebar/header working. Legacy tab values (tags, custom-fields)
   // resolve onto their new home; unknown/empty → the Overview landing.
-  const section = resolveSection(searchParams.get('tab'));
+  const requested = resolveSection(searchParams.get('tab'));
+  // Un no-admin que llega a una sección adminOnly (ej. Miembros por URL)
+  // cae al Resumen — no debe ver quiénes compran datos.
+  const section: SettingsSection =
+    SECTION_META[requested].adminOnly && !isAdmin ? 'overview' : requested;
 
   const go = (next: SettingsSection) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -71,7 +80,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[236px_minmax(0,1fr)] lg:items-start">
-        <SettingsRail active={section} onSelect={go} hints={hints} />
+        <SettingsRail active={section} onSelect={go} hints={hints} isAdmin={isAdmin} />
         <div className="min-w-0">{panel[section]}</div>
       </div>
     </div>

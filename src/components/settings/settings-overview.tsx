@@ -59,7 +59,9 @@ export function SettingsOverview({
       setCountsLoading(true);
       const [membersRes, invitesRes, templatesTotal, templatesPending, tagsRes, fieldsRes] =
         await Promise.allSettled([
-          fetch('/api/account/members', { cache: 'no-store' }).then((r) => r.json()),
+          canManageMembers
+            ? fetch('/api/account/members', { cache: 'no-store' }).then((r) => r.json())
+            : Promise.resolve(null),
           canManageMembers
             ? fetch('/api/account/invitations', { cache: 'no-store' }).then((r) =>
                 r.json(),
