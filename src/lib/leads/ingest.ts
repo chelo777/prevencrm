@@ -21,6 +21,7 @@ import type {
   LeadRepository,
   NormalizedLead,
 } from "./types";
+import { assignFromPool } from "./assign";
 
 export interface IngestOptions {
   /** Auto-asignar por least-loaded (config de la fuente). */
@@ -101,13 +102,9 @@ export async function ingestLead(
     initialStageId = deal.stageId;
   }
 
-  // 4. Asignación least-loaded (idempotente: solo si sin asignar).
+  // 4. Asignación least-loaded (idempotente + registra el evento de tanda).
   if (opts.autoAssign) {
-    const agents = await repo.listEligibleAgents();
-    const pick = pickLeastLoaded(agents);
-    if (pick) {
-      await repo.assignDealIfUnassigned(dealId, pick.userId);
-    }
+    await assignFromPool(repo, dealId);
   }
 
   // 5. Finalize.
