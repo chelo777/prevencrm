@@ -1,6 +1,6 @@
-# Router de datos (MVP) — diseño
+# Router de datos + VBO por capitas (MVP) — diseño
 
-**Fecha:** 2026-07-17 · **Estado:** diseño aprobado (núcleo + reclamo), pendiente review del usuario · **Migración:** 042
+**Fecha:** 2026-07-17 · **Estado:** diseño aprobado (router + reclamo + VBO), pendiente review del usuario · **Migración:** 042
 
 ## Objetivo
 
@@ -74,12 +74,43 @@ Un lead **"sin trabajar"** = asignado pero sin ninguna señal de actividad
 - Si no hay otro asesor elegible, el lead queda sin asignar en el pozo (visible como
   "Sin asignar") hasta que haya cupo.
 
+## VBO por capitas (feedback de valor a Meta)
+
+Fuente de valor = **capitas** (vidas cubiertas del grupo familiar). El asesor
+averigua la composición del grupo **antes de cotizar**, así que el dato es
+**exacto en la etapa `calificado`** (no estimado).
+
+- **Valor a Meta = capitas pelada** (número de vidas, 1/2/4…). NO se usa un precio
+  en ARS: el precio real varía por plan vendido, aportes (si es empleado), metas
+  del agente y otras variables que **no se conocen en `calificado`** (el plan aún
+  no se vendió). Capitas es una señal relativa estable (familia de 4 ≈ 4× un
+  soltero) — suficiente para que Meta prefiera grupos grandes.
+- **Captura:** `deals.capitas INTEGER` (nullable). El asesor lo completa **al
+  calificar**. UX: prompt de capitas al mover el deal a la etapa `Calificado`
+  (garantiza que esté seteado antes de que el cron dispare el CAPI), y campo
+  editable en el detalle del lead como respaldo.
+- **Envío CAPI:** `buildEventPayload` (`capi.ts:79-103`) hoy NO manda `custom_data`.
+  Se agrega `custom_data: { value: <capitas>, currency: 'ARS' }` en el evento
+  `calificado` (alto volumen + exacto → VBO real) y en `closed-won` (misma cifra o
+  actualizada a la afiliación). Si `capitas` es null al enviar → default **1**
+  (se asume individual). `no-calificado`/`perdido` van sin valor (o value 0).
+- **Limitación de idempotencia (MVP):** el evento es único por `(lead_id, event_name)`
+  y se "sella" al primer envío `sent`. Si el asesor corrige las capitas DESPUÉS de
+  que `calificado` ya se envió, el valor viejo queda en Meta y no se reenvía. Por
+  eso la captura va **en la transición a `Calificado`**, antes del cron (5 min).
+  Corrección de valor post-envío = v2.
+- **Ops (fuera de código):** para que el valor OPTIMICE, el adset debe optimizar por
+  `calificado` con **Value Optimization** activado en Meta — configuración, no código.
+
 ## Modelo de datos (migración 042)
 
 ```sql
 ALTER TABLE profiles
   ADD COLUMN IF NOT EXISTS receiving_leads BOOLEAN NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS leads_received_count INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE deals
+  ADD COLUMN IF NOT EXISTS capitas INTEGER; -- vidas cubiertas; alimenta el value CAPI
 
 -- Preservar el comportamiento actual: los compradores existentes arrancan
 -- recibiendo; los nuevos arrancan apagados hasta que el admin los active.
@@ -123,13 +154,18 @@ El incremento/decremento del contador lo hace el router con **service-role**
   sin asesor elegible → queda sin asignar.
 - `set_member_receiving` / `reset_member_lead_count`: admin-only, no self/owner,
   scope por cuenta (tests de RLS por simulación como en el gate anterior).
+- **VBO:** `buildEventPayload` incluye `custom_data.value` = capitas en
+  `calificado`/`closed-won`; default 1 si null; `no-calificado`/`perdido` sin value.
+  El payload sigue idempotente por `(lead_id, event_name)`.
 
 ## Fuera de alcance (explícito)
 
-- **VBO (Value-Based Optimization):** mandar un `value` por conversión a Meta.
-  Requiere primero **capturar un valor $ por deal** (hoy `deal.value = 0`); el
-  trabajo real es *medir* el valor (prima/comisión/proxy), no enviarlo. Se defiere
-  hasta tener esa fuente de valor. La optimización por cantidad actual alcanza.
+- **Precio en ARS / valor monetario por deal:** no se calcula; el value CAPI es la
+  capita pelada. El precio real (plan, aportes, metas) se resuelve recién en la
+  venta y es demasiado variable para el value de `calificado`. Un value monetario
+  afinado es v2.
+- **Corrección de valor post-envío:** si las capitas cambian después de que el
+  evento `calificado` ya se selló, no se reenvía a Meta (v2: evento de corrección).
 - **Señal por asesor a Meta:** innecesaria — Meta optimiza *anuncios*, no asesores;
   la calificación del lead ya es la señal y ya llega por `lead_id`.
 - **Cupo por tiempo / auto-apagado por cupo numérico:** v2.
