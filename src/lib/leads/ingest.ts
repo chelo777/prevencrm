@@ -15,8 +15,8 @@
 // ============================================================
 
 import type {
-  AssignableAgent,
   ClaimedLead,
+  EligibleAgent,
   IngestResult,
   LeadRepository,
   NormalizedLead,
@@ -46,8 +46,8 @@ export function resolveStage(
 
 /** Elige el asesor con menos deals abiertos; desempata al azar. */
 export function pickLeastLoaded(
-  agents: AssignableAgent[],
-): AssignableAgent | null {
+  agents: EligibleAgent[],
+): EligibleAgent | null {
   if (agents.length === 0) return null;
   const min = Math.min(...agents.map((a) => a.openDeals));
   const pool = agents.filter((a) => a.openDeals === min);
@@ -103,7 +103,7 @@ export async function ingestLead(
 
   // 4. Asignación least-loaded (idempotente: solo si sin asignar).
   if (opts.autoAssign) {
-    const agents = await repo.listAssignableAgents();
+    const agents = await repo.listEligibleAgents();
     const pick = pickLeastLoaded(agents);
     if (pick) {
       await repo.assignDealIfUnassigned(dealId, pick.userId);

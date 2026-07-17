@@ -116,11 +116,21 @@ export type CanonicalField =
   | "formId"
   | "formName";
 
-/** Un asesor asignable con su carga actual (deals abiertos en el pipeline). */
-export interface AssignableAgent {
+/** Un asesor elegible con su carga actual (deals abiertos en el pipeline). */
+export interface EligibleAgent {
   userId: string;
   openDeals: number;
 }
+
+/** Lead asignado pero sin trabajar, candidato a reclamo (pozo común). */
+export interface StaleLead {
+  leadId: string;
+  dealId: string;
+  assignedAgentId: string;
+}
+
+/** Eventos de tanda registrados en activity_log (contador derivado). */
+export type AssignEventKind = "lead_assigned" | "lead_reclaimed";
 
 export type IngestOutcome =
   | "processed"
@@ -187,11 +197,26 @@ export interface LeadRepository {
   /** Marca contact_id en el lead reclamado (checkpoint de reanudación). */
   setLeadContact(leadId: string, contactId: string): Promise<void>;
 
-  /** Lista asesores asignables ordenados por menor carga. */
-  listAssignableAgents(): Promise<AssignableAgent[]>;
+  /**
+   * Lista asesores elegibles del pozo común: reciben leads, bajo cupo
+   * (recibidos de la tanda derivados de activity_log), no bloqueados.
+   */
+  listEligibleAgents(): Promise<EligibleAgent[]>;
 
-  /** Asigna el deal a un asesor solo si está sin asignar (idempotente). */
-  assignDealIfUnassigned(dealId: string, userId: string): Promise<void>;
+  /** Asigna el deal a un asesor solo si está sin asignar (idempotente). Devuelve si asignó. */
+  assignDealIfUnassigned(dealId: string, userId: string): Promise<boolean>;
+
+  /** Registra un evento de tanda (lead_assigned / lead_reclaimed) en activity_log. */
+  recordAssignEvent(userId: string, dealId: string, kind: AssignEventKind): Promise<void>;
+
+  /** Desasigna el deal (reclamo: lo devuelve al pozo). */
+  unassignDeal(dealId: string): Promise<void>;
+
+  /**
+   * Deals asignados en la etapa inicial, creados después de `reclaimAfterIso`,
+   * sin actividad post-asignación en activity_log (candidatos a reclamo).
+   */
+  listStaleAssignedLeads(reclaimAfterIso: string): Promise<StaleLead[]>;
 
   /** Cierra el lead: status='processed' + atribución + raw + estado de hoja. */
   finalizeLead(

@@ -12,15 +12,21 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { findExistingContact, isUniqueViolation } from "@/lib/contacts/dedupe";
 import type {
-  AssignableAgent,
+  AssignEventKind,
   ClaimedLead,
   ColumnMapping,
+  EligibleAgent,
   LeadAttribution,
   LeadRepository,
   LeadSourceConfig,
+  StaleLead,
 } from "./types";
 
 const DEAL_CURRENCY = "ARS";
+/** Umbral de "sin trabajar" para el reclamo (días). */
+const STALE_DAYS = 3;
+/** Tope de candidatos procesados por corrida del reclamo (acota el N+1). */
+const RECLAIM_BATCH = 50;
 
 export function createLeadRepository(
   admin: SupabaseClient,
@@ -204,44 +210,91 @@ export function createLeadRepository(
       if (error) throw error;
     },
 
-    async listAssignableAgents(): Promise<AssignableAgent[]> {
-      const { data: members, error } = await admin
+    async listEligibleAgents(): Promise<EligibleAgent[]> {
+      const { data: members } = await admin
         .from("profiles")
-        .select("user_id")
+        .select("user_id, lead_cap, receiving_since")
         .eq("account_id", accountId)
-        .eq("is_lead_buyer", true);
-      if (error) throw error;
-      const userIds = (members ?? []).map((m) => m.user_id as string);
-      if (userIds.length === 0) return [];
+        .eq("is_lead_buyer", true)
+        .eq("receiving_leads", true)
+        .eq("blocked", false);
+      const rows = (members ?? []) as { user_id: string; lead_cap: number | null; receiving_since: string | null }[];
+      if (rows.length === 0) return [];
 
       // Carga actual = deals abiertos del pipeline por asesor.
       const { data: openDeals } = await admin
-        .from("deals")
-        .select("assigned_agent_id")
-        .eq("account_id", accountId)
-        .eq("pipeline_id", pipelineId)
-        .eq("status", "open")
-        .not("assigned_agent_id", "is", null);
-
-      const counts = new Map<string, number>();
+        .from("deals").select("assigned_agent_id")
+        .eq("account_id", accountId).eq("pipeline_id", pipelineId)
+        .eq("status", "open").not("assigned_agent_id", "is", null);
+      const load = new Map<string, number>();
       for (const d of openDeals ?? []) {
-        const a = d.assigned_agent_id as string;
-        counts.set(a, (counts.get(a) ?? 0) + 1);
+        const a = d.assigned_agent_id as string; load.set(a, (load.get(a) ?? 0) + 1);
       }
 
-      return userIds.map((userId) => ({
-        userId,
-        openDeals: counts.get(userId) ?? 0,
-      }));
+      const out: EligibleAgent[] = [];
+      for (const r of rows) {
+        if (r.lead_cap != null) {
+          const since = r.receiving_since ?? "1970-01-01";
+          const { count: assigned } = await admin.from("activity_log")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", r.user_id).eq("action", "lead_assigned").gte("created_at", since);
+          const { count: reclaimed } = await admin.from("activity_log")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", r.user_id).eq("action", "lead_reclaimed").gte("created_at", since);
+          const received = (assigned ?? 0) - (reclaimed ?? 0);
+          if (received >= r.lead_cap) continue; // auto-apagado por cupo
+        }
+        out.push({ userId: r.user_id, openDeals: load.get(r.user_id) ?? 0 });
+      }
+      return out;
     },
 
     async assignDealIfUnassigned(dealId, userId) {
-      const { error } = await admin
+      const { data, error } = await admin
         .from("deals")
         .update({ assigned_agent_id: userId })
         .eq("id", dealId)
-        .is("assigned_agent_id", null);
+        .is("assigned_agent_id", null)
+        .select("id");
       if (error) throw error;
+      return (data?.length ?? 0) > 0;
+    },
+
+    async recordAssignEvent(userId: string, dealId: string, kind: AssignEventKind) {
+      await admin.from("activity_log").insert({
+        account_id: accountId, user_id: userId, deal_id: dealId, action: kind, meta: {},
+      });
+    },
+
+    async unassignDeal(dealId: string) {
+      const { error } = await admin.from("deals").update({ assigned_agent_id: null }).eq("id", dealId);
+      if (error) throw error;
+    },
+
+    async listStaleAssignedLeads(reclaimAfterIso: string): Promise<StaleLead[]> {
+      const { data: initial } = await admin.from("pipeline_stages")
+        .select("id").eq("pipeline_id", pipelineId).order("position", { ascending: true }).limit(1).maybeSingle();
+      const initialStageId = initial?.id as string | undefined;
+      if (!initialStageId) return [];
+      const cutoffIso = new Date(Date.now() - STALE_DAYS * 86400_000).toISOString();
+      const { data: deals } = await admin.from("deals")
+        .select("id, assigned_agent_id, created_at")
+        .eq("account_id", accountId).eq("pipeline_id", pipelineId).eq("stage_id", initialStageId)
+        .not("assigned_agent_id", "is", null)
+        .gt("created_at", reclaimAfterIso)   // gate: excluye backlog histórico
+        .lt("created_at", cutoffIso)          // más viejo que el umbral de reclamo
+        .limit(RECLAIM_BATCH);                // batch limit
+      const out: StaleLead[] = [];
+      for (const d of deals ?? []) {
+        // "Trabajado" = cualquier evento en activity_log para el deal DESPUÉS de crearse.
+        const { count } = await admin.from("activity_log")
+          .select("id", { count: "exact", head: true })
+          .eq("deal_id", d.id as string).gt("created_at", d.created_at as string);
+        if ((count ?? 0) > 0) continue;
+        const { data: lead } = await admin.from("leads").select("id").eq("deal_id", d.id as string).maybeSingle();
+        if (lead) out.push({ leadId: lead.id as string, dealId: d.id as string, assignedAgentId: d.assigned_agent_id as string });
+      }
+      return out;
     },
 
     async getDealStage(dealId) {
