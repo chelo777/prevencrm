@@ -85,6 +85,9 @@ interface Member {
   joined_at: string;
   allowed_modules: string[] | null;
   blocked: boolean;
+  receiving_leads: boolean;
+  lead_cap: number | null;
+  received_this_cycle: number;
 }
 
 interface Invitation {
@@ -459,6 +462,9 @@ export function MembersTab() {
                           name={member.full_name}
                           allowedModules={member.allowed_modules}
                           blocked={member.blocked}
+                          receiving={member.receiving_leads}
+                          leadCap={member.lead_cap}
+                          receivedThisCycle={member.received_this_cycle}
                           onUpdated={loadEverything}
                         />
                       )}
