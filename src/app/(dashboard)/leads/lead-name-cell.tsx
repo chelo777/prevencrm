@@ -10,17 +10,30 @@ export function LeadNameCell({
   name,
   phone,
   phoneValid,
+  duplicate,
 }: {
   contactId: string | null;
   name: string;
   phone: string | null;
   phoneValid: boolean;
+  // Admin-only: mismo teléfono con más de un lead (ver dupContactIds en
+  // page.tsx). Un chip chico basta, no bloquea nada.
+  duplicate?: boolean;
 }) {
   const openLead = useOpenLead();
 
+  const dupBadge = duplicate && (
+    <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+      duplicado
+    </span>
+  );
+
   const inner = (
     <>
-      <div className="font-medium text-foreground">{name}</div>
+      <div className="font-medium text-foreground">
+        {name}
+        {dupBadge}
+      </div>
       <div className="text-xs text-muted-foreground">
         {phone || "—"}
         {!phoneValid && (
@@ -42,6 +55,7 @@ export function LeadNameCell({
     >
       <div className="font-medium text-foreground group-hover:text-primary">
         {name}
+        {dupBadge}
       </div>
       <div className="text-xs text-muted-foreground">
         {phone || "—"}

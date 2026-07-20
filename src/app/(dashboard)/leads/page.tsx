@@ -8,6 +8,7 @@ import { StageSelect, type StageOption } from "./stage-select";
 import { LeadDetailProvider } from "./lead-detail-provider";
 import { LeadNameCell } from "./lead-name-cell";
 import { AssigneeSelect, type Asesora } from "./assignee-select";
+import { DeleteLeadButton } from "./delete-lead-button";
 
 export const dynamic = "force-dynamic";
 
@@ -103,6 +104,8 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     isAdmin && typeof params.asesora === "string" && params.asesora
       ? params.asesora
       : null;
+  // Filtro "Solo duplicados" (solo admin): ver dupContactIds más abajo.
+  const dupFilter = isAdmin && params.dup === "1";
   const pageNum = Math.max(
     1,
     Number(typeof params.pagina === "string" ? params.pagina : "1") || 1,
@@ -153,6 +156,41 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     asesoras.map((a) => [a.user_id, a.full_name || a.user_id.slice(0, 8)]),
   );
 
+  // Duplicados por teléfono (solo admin): un mismo phone_normalized con
+  // más de un lead. La ingesta dedupea el CONTACTO por teléfono, así que
+  // detectamos agrupando por ese teléfono normalizado y armamos el set de
+  // contact_id que lo comparten. Query liviana de toda la cuenta (sin
+  // paginar) — solo trae contact_id + teléfono, nada de payloads grandes.
+  const dupContactIds = new Set<string>();
+  if (isAdmin) {
+    const { data: allLeadsPhones } = await supabase
+      .from("leads")
+      .select("contact_id, contact:contacts(phone_normalized)")
+      .eq("account_id", accountId);
+    // Contamos LEADS por teléfono normalizado (no contactos): "un mismo
+    // teléfono con más de un lead" es la definición pedida.
+    const leadCountByPhone = new Map<string, number>();
+    const contactIdsByPhone = new Map<string, Set<string>>();
+    for (const row of (allLeadsPhones ?? []) as unknown as {
+      contact_id: string | null;
+      contact: { phone_normalized: string | null } | null;
+    }[]) {
+      const phone = row.contact?.phone_normalized;
+      if (!phone || !row.contact_id) continue;
+      leadCountByPhone.set(phone, (leadCountByPhone.get(phone) ?? 0) + 1);
+      if (!contactIdsByPhone.has(phone))
+        contactIdsByPhone.set(phone, new Set());
+      contactIdsByPhone.get(phone)!.add(row.contact_id);
+    }
+    for (const [phone, count] of leadCountByPhone) {
+      if (count > 1) {
+        for (const cid of contactIdsByPhone.get(phone) ?? [])
+          dupContactIds.add(cid);
+      }
+    }
+  }
+  const dupCount = dupContactIds.size;
+
   // El embed de contact_tags(tags(*)) trae SIEMPRE el set completo de
   // etiquetas para mostrar; `tag_filter` es un inner join aparte usado
   // solo como WHERE (mismo patrón que /api/v1/contacts).
@@ -177,6 +215,14 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     query = query.is("deal.assigned_agent_id", null);
   else if (asesoraFilter)
     query = query.eq("deal.assigned_agent_id", asesoraFilter);
+  if (dupFilter) {
+    // Set vacío = ningún duplicado; forzamos un contact_id imposible para
+    // que la query no devuelva nada en vez de traer todo.
+    query = query.in(
+      "contact_id",
+      dupContactIds.size > 0 ? [...dupContactIds] : ["00000000-0000-0000-0000-000000000000"],
+    );
+  }
 
   const { data: leads, count } = await query
     .order("created_at", { ascending: false })
@@ -207,13 +253,29 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   const rows = (leads ?? []) as unknown as LeadRow[];
   const total = count ?? rows.length;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const hasFilters = Boolean(stageFilter || tagFilter || asesoraFilter);
+  const hasFilters = Boolean(
+    stageFilter || tagFilter || asesoraFilter || dupFilter,
+  );
 
   function pageHref(n: number): string {
     const sp = new URLSearchParams();
     if (stageFilter) sp.set("etapa", stageFilter);
     if (tagFilter) sp.set("etiqueta", tagFilter);
+    if (asesoraFilter) sp.set("asesora", asesoraFilter);
+    if (dupFilter) sp.set("dup", "1");
     if (n > 1) sp.set("pagina", String(n));
+    const qs = sp.toString();
+    return qs ? `/leads?${qs}` : "/leads";
+  }
+
+  // Toggle del filtro "Solo duplicados" (admin-only), preservando el resto
+  // de los filtros activos en la URL.
+  function dupToggleHref(): string {
+    const sp = new URLSearchParams();
+    if (stageFilter) sp.set("etapa", stageFilter);
+    if (tagFilter) sp.set("etiqueta", tagFilter);
+    if (asesoraFilter) sp.set("asesora", asesoraFilter);
+    if (!dupFilter) sp.set("dup", "1");
     const qs = sp.toString();
     return qs ? `/leads?${qs}` : "/leads";
   }
@@ -240,14 +302,30 @@ export default async function LeadsPage({ searchParams }: PageProps) {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <LeadFilters
-          stages={stages}
-          tags={tagOptions}
-          asesoras={asesoras.map((a) => ({
-            id: a.user_id,
-            name: a.full_name || a.user_id.slice(0, 8),
-          }))}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <LeadFilters
+            stages={stages}
+            tags={tagOptions}
+            asesoras={asesoras.map((a) => ({
+              id: a.user_id,
+              name: a.full_name || a.user_id.slice(0, 8),
+            }))}
+          />
+          {isAdmin && (
+            <Link
+              href={dupToggleHref()}
+              className={
+                dupFilter
+                  ? "rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-sm font-medium text-amber-500"
+                  : "rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground hover:bg-muted"
+              }
+            >
+              {dupFilter
+                ? "Quitar filtro de duplicados"
+                : `Solo duplicados (${dupCount})`}
+            </Link>
+          )}
+        </div>
         <span className="text-sm text-muted-foreground">
           {total} lead{total === 1 ? "" : "s"}
           {hasFilters ? " con estos filtros" : ""}
@@ -322,6 +400,13 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                         name={lead.contact?.name || "Sin nombre"}
                         phone={lead.contact?.phone ?? null}
                         phoneValid={lead.phone_valid}
+                        duplicate={
+                          isAdmin &&
+                          Boolean(
+                            lead.contact?.id &&
+                              dupContactIds.has(lead.contact.id),
+                          )
+                        }
                       />
                       {leadTags.length > 0 && (
                         <div className="mt-1 md:hidden">
@@ -368,13 +453,21 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                       {fmtDate(lead.created_at)}
                     </td>
                     <td className="px-3 py-3 text-right sm:px-4 sm:text-left">
-                      <WhatsAppButton
-                        leadId={lead.id}
-                        phone={lead.contact?.phone ?? null}
-                        name={lead.contact?.name ?? null}
-                        campaign={lead.campaign_name ?? lead.form_name}
-                        disabled={!lead.phone_valid}
-                      />
+                      <div className="flex items-center justify-end gap-1.5 sm:justify-start">
+                        <WhatsAppButton
+                          leadId={lead.id}
+                          phone={lead.contact?.phone ?? null}
+                          name={lead.contact?.name ?? null}
+                          campaign={lead.campaign_name ?? lead.form_name}
+                          disabled={!lead.phone_valid}
+                        />
+                        {isAdmin && (
+                          <DeleteLeadButton
+                            leadId={lead.id}
+                            leadName={lead.contact?.name ?? ""}
+                          />
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
