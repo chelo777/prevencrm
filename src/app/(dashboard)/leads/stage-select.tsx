@@ -35,13 +35,13 @@ export function StageSelect({
     const prev = stageId;
     if (!next || next === prev) return;
 
-    // "Calificado" requiere capitas cargadas (VBO para el CAPI) y acá, en
-    // la tabla, no hay dónde cargarlas — se bloquea y se manda al lead a
-    // abrir el detalle. Nunca window.prompt.
+    // Mover a "Calificado" ya NO se bloquea. Como acá (en la tabla) no hay
+    // dónde cargar las capitas, solo recordamos hacerlo en el detalle para
+    // sumar el valor a Meta (el CAPI es null-safe: sin capitas manda el
+    // evento sin valor, nunca basura).
     const targetStage = stages.find((s) => s.id === next);
     if (targetStage?.name === "Calificado") {
-      toast.error("Abrí el lead y cargá las capitas para calificar");
-      return;
+      toast.info("Abrí el lead y cargá las capitas para sumar el valor a Meta");
     }
 
     setStageId(next);

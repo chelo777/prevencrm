@@ -290,18 +290,16 @@ export function ContactDetailView({
     const primary = deals[0];
     if (!primary || !nextStageId || nextStageId === headerStageId) return;
 
-    // Gate: mover a "Calificado" requiere capitas válida (1–20). El CAPI
-    // (Task 6) manda custom_data.value=capitas al llegar a esa etapa y el
-    // cron sella el evento en el primer envío, así que tiene que estar
-    // cargada ANTES del movimiento. Nada de window.prompt — bloqueo con
-    // toast + aviso inline sobre el input de capitas.
+    // Al calificar conviene tener capitas (el CAPI manda custom_data.value=capitas
+    // al llegar a "Calificado"). Ya NO bloquea — el CAPI es null-safe (sin capitas
+    // manda el evento sin valor, nunca basura). Solo un recordatorio suave para no
+    // perder el valor VBO de ese lead.
     const targetStage = stages.find((s) => s.id === nextStageId);
     if (targetStage?.name === 'Calificado' && !isValidCapitas(capitas)) {
-      toast.error('Cargá las capitas antes de calificar', {
-        description: 'Ingresá un número entero de 1 a 20 en "Capitas" (tab Deals) y guardá.',
+      toast.info('Cargá las capitas para sumar el valor a Meta', {
+        description: 'El campo "Capitas" está arriba, al lado del estado.',
       });
       setCapitasWarning(true);
-      return;
     }
 
     const prev = headerStageId;
@@ -342,6 +340,25 @@ export function ContactDetailView({
       fetchDeals();
     }
     setSavingCapitas(false);
+  }
+
+  // Guardado por blur del campo de capitas del header: vacío → limpia,
+  // válido → guarda, inválido → avisa. Sin fricción (no bloquea nada).
+  async function commitCapitas() {
+    const primary = deals[0];
+    if (!primary) return;
+    const raw = capitas.trim();
+    if (raw === '') {
+      await supabase.from('deals').update({ capitas: null }).eq('id', primary.id);
+      setCapitasWarning(false);
+      fetchDeals();
+      return;
+    }
+    if (!isValidCapitas(capitas)) {
+      toast.error('Capitas: un número entero de 1 a 20');
+      return;
+    }
+    await saveCapitas();
   }
 
   // Reasignar el deal a otra asesora (admin). Actualiza assigned_agent_id
@@ -645,6 +662,33 @@ export function ContactDetailView({
                       </span>
                     );
                   })()}
+                </div>
+              )}
+              {deals[0] && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Capitas</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={capitas}
+                    onChange={(e) => {
+                      setCapitas(e.target.value);
+                      setCapitasWarning(false);
+                    }}
+                    onBlur={() => void commitCapitas()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
+                    disabled={savingCapitas}
+                    placeholder="—"
+                    aria-label="Capitas (vidas cubiertas)"
+                    className={`h-7 w-14 rounded-md border bg-muted px-2 text-center text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                      capitasWarning ? 'border-amber-500' : 'border-border'
+                    }`}
+                  />
+                  <span className="text-[11px] text-muted-foreground">
+                    vidas cubiertas (para el valor a Meta)
+                  </span>
                 </div>
               )}
               {canManageMembers && deals[0] && asesoras.length > 0 && (
