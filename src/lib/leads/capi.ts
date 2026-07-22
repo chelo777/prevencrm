@@ -6,9 +6,13 @@
 // "Calificado"). Reconciliación idempotente: se envía UNA vez por
 // (lead, event_name) — nunca reversa (conversiones monótonas, B5).
 //
-// COMPLIANCE (B8): el payload lleva SOLO identificadores hasheados
-// (email, teléfono, nombre) + metadata del evento. JAMÁS respuestas
-// del formulario ni datos de salud. La allowlist está codificada acá.
+// COMPLIANCE (B8): el payload lleva SOLO identificadores de matching de
+// Meta, hasheados (email, teléfono, nombre, ciudad, código postal) +
+// external_id (id de contacto hasheado) + metadata del evento. JAMÁS
+// respuestas del formulario ni datos de salud (tratamiento, situación
+// laboral, edad, cantidad de personas, etc.). La allowlist está codificada
+// acá: ciudad/CP se leen SOLO de los custom fields "Ciudad" y "Código
+// Postal", nunca del resto.
 //
 // Env: META_CAPI_ACCESS_TOKEN (el token NUNCA se guarda en la DB).
 // ============================================================
@@ -35,6 +39,26 @@ export interface CapiContact {
   email: string | null;
   phone: string | null;
   name: string | null;
+  /** UUID del contacto → external_id (hasheado). Mejora el match quality. */
+  externalId?: string | null;
+  /** Ciudad (custom field "Ciudad"). Se normaliza a-z sin acentos y hashea. */
+  city?: string | null;
+  /** Código postal (custom field "Código Postal"). Alfanumérico, hasheado. */
+  zip?: string | null;
+}
+
+/** Ciudad al formato de Meta: minúsculas, sin acentos, solo letras. */
+function normalizeCity(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // quita diacríticos (María → maria)
+    .toLowerCase()
+    .replace(/[^a-z]/g, ""); // sin espacios, dígitos ni puntuación
+}
+
+/** CP al formato de Meta: minúsculas, sin espacios (AR: "2000", "s2000der"). */
+function normalizeZip(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "");
 }
 
 /** Construye user_data con la ALLOWLIST (nada de salud). */
@@ -58,6 +82,22 @@ export function buildUserData(contact: CapiContact): Record<string, string[]> {
       const ln = hashField(parts.slice(1).join(" "));
       if (ln) data.ln = [ln];
     }
+  }
+
+  // external_id: id interno del contacto (hasheado). Nunca sale en claro.
+  if (contact.externalId) {
+    const ext = contact.externalId.trim().toLowerCase();
+    if (ext) data.external_id = [sha256(ext)];
+  }
+
+  // Ubicación (matching de Meta, NO datos de salud).
+  if (contact.city) {
+    const ct = normalizeCity(contact.city);
+    if (ct) data.ct = [sha256(ct)];
+  }
+  if (contact.zip) {
+    const zp = normalizeZip(contact.zip);
+    if (zp) data.zp = [sha256(zp)];
   }
 
   return data;
@@ -182,6 +222,20 @@ export async function reconcileCapiForAccount(
   if (stageIds.length === 0) return totals;
 
   // Deals que ya están en la etapa disparadora.
+  // IDs de los custom fields de ubicación (matching de Meta). Solo estos
+  // dos — jamás los campos de salud. Se resuelven una vez por cuenta.
+  const { data: locFields } = await admin
+    .from("custom_fields")
+    .select("id, field_name")
+    .eq("account_id", config.account_id)
+    .in("field_name", ["Ciudad", "Código Postal"]);
+  const cityFieldId =
+    (locFields ?? []).find((f) => f.field_name === "Ciudad")?.id as string | undefined;
+  const zipFieldId =
+    (locFields ?? []).find((f) => f.field_name === "Código Postal")?.id as
+      | string
+      | undefined;
+
   const { data: deals } = await admin
     .from("deals")
     .select("id, capitas")
@@ -237,18 +291,37 @@ export async function reconcileCapiForAccount(
     // PII del contacto (allowlist).
     let capiContact: CapiContact = { email: null, phone: null, name: null };
     if (lead.contact_id) {
+      const contactId = lead.contact_id as string;
       const { data: contact } = await admin
         .from("contacts")
         .select("email, phone, name")
-        .eq("id", lead.contact_id as string)
+        .eq("id", contactId)
         .maybeSingle();
-      if (contact) {
-        capiContact = {
-          email: (contact.email as string | null) ?? null,
-          phone: (contact.phone as string | null) ?? null,
-          name: (contact.name as string | null) ?? null,
-        };
+
+      // Ciudad y CP desde los custom fields de ubicación (nunca salud).
+      let city: string | null = null;
+      let zip: string | null = null;
+      const locIds = [cityFieldId, zipFieldId].filter(Boolean) as string[];
+      if (locIds.length > 0) {
+        const { data: vals } = await admin
+          .from("contact_custom_values")
+          .select("custom_field_id, value")
+          .eq("contact_id", contactId)
+          .in("custom_field_id", locIds);
+        for (const v of vals ?? []) {
+          if (v.custom_field_id === cityFieldId) city = (v.value as string | null) ?? null;
+          if (v.custom_field_id === zipFieldId) zip = (v.value as string | null) ?? null;
+        }
       }
+
+      capiContact = {
+        email: (contact?.email as string | null) ?? null,
+        phone: (contact?.phone as string | null) ?? null,
+        name: (contact?.name as string | null) ?? null,
+        externalId: contactId,
+        city,
+        zip,
+      };
     }
 
     const result = await sendConversion({
