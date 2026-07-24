@@ -218,16 +218,26 @@ export default function PipelinesPage() {
       setDeals((prev) =>
         prev.map((d) => (d.id === dealId ? { ...d, stage_id: newStageId } : d)),
       );
-      const { error } = await supabase
-        .from("deals")
-        .update({ stage_id: newStageId })
-        .eq("id", dealId);
-      if (error) {
+      // Persistimos vía endpoint con keepalive: en mobile, si la pestaña pasa a
+      // segundo plano (WhatsApp) o se suspende antes de terminar, un update
+      // directo se abortaría y el movimiento se perdería ("vuelve a Nuevo").
+      try {
+        const res = await fetch("/api/leads/stage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dealId, stageId: newStageId, source: "kanban" }),
+          keepalive: true,
+        });
+        if (!res.ok) {
+          toast.error("No se pudo mover el deal");
+          refreshDeals();
+        }
+      } catch {
         toast.error("No se pudo mover el deal");
         refreshDeals();
       }
     },
-    [supabase, refreshDeals],
+    [refreshDeals],
   );
 
   const handleAddDeal = useCallback(

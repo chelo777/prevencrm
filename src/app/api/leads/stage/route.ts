@@ -21,10 +21,11 @@ export async function POST(req: Request) {
   try {
     const ctx = await requireRole("agent");
     const body = (await req.json().catch(() => null)) as
-      | { dealId?: unknown; stageId?: unknown }
+      | { dealId?: unknown; stageId?: unknown; source?: unknown }
       | null;
     const dealId = body?.dealId;
     const stageId = body?.stageId;
+    const source = typeof body?.source === "string" ? body.source : "leads_list";
     if (typeof dealId !== "string" || typeof stageId !== "string") {
       return NextResponse.json(
         { error: "dealId y stageId son requeridos" },
@@ -60,7 +61,7 @@ export async function POST(req: Request) {
         user_id: ctx.userId,
         deal_id: dealId,
         action: "stage_change",
-        meta: { stage_id: stageId, source: "leads_list" },
+        meta: { stage_id: stageId, source },
       })
       .then(
         () => {},

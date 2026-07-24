@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
+import { useAndroidBackClose } from '@/hooks/use-android-back';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag, ContactNote, CustomField, ContactCustomValue, Deal, MessageTemplate } from '@/types';
 import {
@@ -74,6 +75,9 @@ export function ContactDetailView({
 }: ContactDetailViewProps) {
   const supabase = createClient();
   const { accountId, canManageMembers } = useAuth();
+
+  // En la PWA (Android), el botón atrás cierra este panel en vez de salir de la app.
+  useAndroidBackClose(open, () => onOpenChange(false));
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -304,18 +308,27 @@ export function ContactDetailView({
 
     const prev = headerStageId;
     setHeaderStageId(nextStageId); // optimista
-    const { error } = await supabase
-      .from('deals')
-      .update({ stage_id: nextStageId })
-      .eq('id', primary.id);
-    if (error) {
+    // Persistimos vía endpoint con keepalive (durable ante navegación a
+    // WhatsApp / suspensión de la pestaña en mobile). El endpoint además
+    // registra el stage_change (por eso ya no logueamos acá).
+    try {
+      const res = await fetch('/api/leads/stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dealId: primary.id, stageId: nextStageId, source: 'detail' }),
+        keepalive: true,
+      });
+      if (!res.ok) {
+        setHeaderStageId(prev);
+        toast.error('No se pudo cambiar la etapa');
+      } else {
+        setCapitasWarning(false);
+        fetchDeals(); // mantiene la tab Deals en sync
+        onUpdated();
+      }
+    } catch {
       setHeaderStageId(prev);
       toast.error('No se pudo cambiar la etapa');
-    } else {
-      setCapitasWarning(false);
-      logActivity('stage_change', primary.id, { stage_id: nextStageId });
-      fetchDeals(); // mantiene la tab Deals en sync
-      onUpdated();
     }
   }
 
