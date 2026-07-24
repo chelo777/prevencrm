@@ -100,6 +100,8 @@ export function ContactDetailView({
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [contactTagIds, setContactTagIds] = useState<string[]>([]);
   const [savingTags, setSavingTags] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [creatingTag, setCreatingTag] = useState(false);
 
   // Notes tab
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -457,6 +459,62 @@ export function ContactDetailView({
       }
     }
     setSavingTags(false);
+  }
+
+  // Crear una etiqueta nueva y asignarla al contacto en un solo paso (los
+  // agentes ya pueden crear etiquetas, migración 045). Si ya existe una con ese
+  // nombre, la asigna en vez de duplicar. Color rotando en una paleta.
+  async function createAndAssignTag() {
+    const name = newTagName.trim();
+    if (!contactId || !name) return;
+
+    const existing = allTags.find(
+      (t) => t.name.trim().toLowerCase() === name.toLowerCase(),
+    );
+    if (existing) {
+      setNewTagName('');
+      if (!contactTagIds.includes(existing.id)) await toggleTag(existing.id);
+      return;
+    }
+
+    setCreatingTag(true);
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user;
+    if (!user || !accountId) {
+      toast.error('No hay sesión iniciada');
+      setCreatingTag(false);
+      return;
+    }
+    const palette = [
+      '#3b82f6', '#22c55e', '#eab308', '#f97316',
+      '#8b5cf6', '#ec4899', '#14b8a6', '#ef4444',
+    ];
+    const color = palette[allTags.length % palette.length];
+    const { data, error } = await supabase
+      .from('tags')
+      .insert({ user_id: user.id, account_id: accountId, name, color })
+      .select('*')
+      .single();
+    if (error || !data) {
+      toast.error('No se pudo crear la etiqueta');
+      setCreatingTag(false);
+      return;
+    }
+    const tag = data as Tag;
+    setAllTags((prev) =>
+      [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)),
+    );
+    const { error: assignErr } = await supabase
+      .from('contact_tags')
+      .insert({ contact_id: contactId, tag_id: tag.id });
+    if (!assignErr) {
+      setContactTagIds((prev) => [...prev, tag.id]);
+      onUpdated();
+    }
+    setNewTagName('');
+    setCreatingTag(false);
   }
 
   async function addNote() {
@@ -889,12 +947,41 @@ export function ContactDetailView({
               {/* Tags Tab */}
               <TabsContent value="tags" className="flex-1 overflow-y-auto px-4 py-3">
                 <div className="space-y-3">
+                  {/* Crear + asignar en un paso. Enter o "Crear". */}
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={newTagName}
+                      onChange={(e) => setNewTagName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void createAndAssignTag();
+                        }
+                      }}
+                      placeholder="Nueva etiqueta…"
+                      disabled={creatingTag}
+                      className="h-8 flex-1 bg-muted border-border text-foreground placeholder:text-muted-foreground text-sm"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => void createAndAssignTag()}
+                      disabled={creatingTag || !newTagName.trim()}
+                      className="h-8 bg-primary hover:bg-primary/90 text-primary-foreground"
+                    >
+                      {creatingTag ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="size-3.5" />
+                      )}
+                      Crear
+                    </Button>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     Tocá una etiqueta para agregarla o quitarla de este contacto.
                   </p>
                   {allTags.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      No hay etiquetas. Creá etiquetas en Configuración.
+                      Todavía no hay etiquetas. Escribí un nombre arriba para crear la primera.
                     </p>
                   ) : (
                     <div className="flex flex-wrap gap-2">
