@@ -112,81 +112,102 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   );
   const from = (pageNum - 1) * PER_PAGE;
 
-  // Catálogos: etapas de los pipelines de la cuenta (alimentan el
-  // filtro Y el select inline de cada fila) y etiquetas visibles.
-  const [{ data: pipelines }, { data: tagRows }] = await Promise.all([
-    supabase
-      .from("pipelines")
-      .select("id, stages:pipeline_stages(id, name, color, position)")
-      .eq("account_id", accountId),
-    supabase.from("tags").select("id, name").order("name"),
-  ]);
-  const stages: StageOption[] = (pipelines ?? [])
-    .flatMap(
-      (p) =>
-        (p.stages ?? []) as {
-          id: string;
-          name: string;
-          color: string;
-          position: number;
-        }[],
-    )
+  // ── Catálogos + auxiliares, TODO en un batch paralelo ──
+  // La página es force-dynamic (se renderiza en el servidor por request); el
+  // costo real es la LATENCIA de cada round-trip a Supabase, no el SQL (las
+  // queries corren en ~1-2 ms). Antes iban en secuencia (catálogos → asesoras
+  // → duplicados → leads → cuarentena → deep-link = 5-6 viajes). Ahora todas
+  // las auxiliares van juntas (un viaje) y después el query principal.
+  const asesorasP = isAdmin
+    ? supabase
+        .from("profiles")
+        .select("user_id, full_name")
+        .eq("account_id", accountId)
+        .eq("is_lead_buyer", true)
+        .order("full_name")
+    : null;
+  // Duplicados por teléfono (solo admin): un mismo phone_normalized con más de
+  // un lead. Query liviana de toda la cuenta — solo contact_id + teléfono.
+  const dupScanP = isAdmin
+    ? supabase
+        .from("leads")
+        .select("contact_id, contact:contacts(phone_normalized)")
+        .eq("account_id", accountId)
+    : null;
+  // Deep-link ?lead=<id> (push de nuevo lead): resolvemos el contacto a abrir.
+  const deepLinkLead =
+    typeof params.lead === "string" && params.lead ? params.lead : null;
+  const deepLinkP = deepLinkLead
+    ? supabase
+        .from("leads")
+        .select("contact_id")
+        .eq("id", deepLinkLead)
+        .eq("account_id", accountId)
+        .maybeSingle()
+    : null;
+
+  const [pipelinesRes, tagsRes, asesorasRes, dupScanRes, quarantineRes, deepLinkRes] =
+    await Promise.all([
+      supabase
+        .from("pipelines")
+        .select("id, stages:pipeline_stages(id, name, color, position)")
+        .eq("account_id", accountId),
+      supabase.from("tags").select("id, name").order("name"),
+      asesorasP ??
+        Promise.resolve({
+          data: [] as { user_id: string; full_name: string | null }[],
+        }),
+      dupScanP ?? Promise.resolve({ data: [] as unknown[] }),
+      supabase
+        .from("lead_intake_errors")
+        .select("id", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .eq("resolved", false),
+      deepLinkP ??
+        Promise.resolve({ data: null as { contact_id: string | null } | null }),
+    ]);
+
+  const stages: StageOption[] = ((pipelinesRes.data ?? []) as {
+    stages?: { id: string; name: string; color: string; position: number }[];
+  }[])
+    .flatMap((p) => p.stages ?? [])
     .sort((a, b) => a.position - b.position)
     .map((s) => ({ id: s.id, name: s.name, color: s.color }));
-  const tagOptions = (tagRows ?? []).map((t) => ({ id: t.id, name: t.name }));
+  const tagOptions = ((tagsRes.data ?? []) as { id: string; name: string }[]).map(
+    (t) => ({ id: t.id, name: t.name }),
+  );
 
-  // Asesoras compradoras (is_lead_buyer) — solo para admin: alimentan la
-  // columna "Asignada a", el filtro y el selector de reasignación inline.
-  const asesoras: Asesora[] = isAdmin
-    ? (
-        (
-          await supabase
-            .from("profiles")
-            .select("user_id, full_name")
-            .eq("account_id", accountId)
-            .eq("is_lead_buyer", true)
-            .order("full_name")
-        ).data ?? []
-      ).map((a) => ({
-        user_id: a.user_id as string,
-        full_name: (a.full_name as string | null) ?? null,
-      }))
-    : [];
+  const asesoras: Asesora[] = (
+    (asesorasRes.data ?? []) as { user_id: string; full_name: string | null }[]
+  ).map((a) => ({ user_id: a.user_id, full_name: a.full_name ?? null }));
   const asesoraName = new Map(
     asesoras.map((a) => [a.user_id, a.full_name || a.user_id.slice(0, 8)]),
   );
 
-  // Duplicados por teléfono (solo admin): un mismo phone_normalized con
-  // más de un lead. La ingesta dedupea el CONTACTO por teléfono, así que
-  // detectamos agrupando por ese teléfono normalizado y armamos el set de
-  // contact_id que lo comparten. Query liviana de toda la cuenta (sin
-  // paginar) — solo trae contact_id + teléfono, nada de payloads grandes.
+  const quarantineCount = quarantineRes.count;
+  const deepLinkContactId =
+    (deepLinkRes.data as { contact_id: string | null } | null)?.contact_id ??
+    null;
+
+  // "Un mismo teléfono con más de un lead" → set de contact_id duplicados.
   const dupContactIds = new Set<string>();
-  if (isAdmin) {
-    const { data: allLeadsPhones } = await supabase
-      .from("leads")
-      .select("contact_id, contact:contacts(phone_normalized)")
-      .eq("account_id", accountId);
-    // Contamos LEADS por teléfono normalizado (no contactos): "un mismo
-    // teléfono con más de un lead" es la definición pedida.
+  {
     const leadCountByPhone = new Map<string, number>();
     const contactIdsByPhone = new Map<string, Set<string>>();
-    for (const row of (allLeadsPhones ?? []) as unknown as {
+    for (const row of (dupScanRes.data ?? []) as {
       contact_id: string | null;
       contact: { phone_normalized: string | null } | null;
     }[]) {
       const phone = row.contact?.phone_normalized;
       if (!phone || !row.contact_id) continue;
       leadCountByPhone.set(phone, (leadCountByPhone.get(phone) ?? 0) + 1);
-      if (!contactIdsByPhone.has(phone))
-        contactIdsByPhone.set(phone, new Set());
+      if (!contactIdsByPhone.has(phone)) contactIdsByPhone.set(phone, new Set());
       contactIdsByPhone.get(phone)!.add(row.contact_id);
     }
-    for (const [phone, count] of leadCountByPhone) {
-      if (count > 1) {
+    for (const [phone, n] of leadCountByPhone) {
+      if (n > 1)
         for (const cid of contactIdsByPhone.get(phone) ?? [])
           dupContactIds.add(cid);
-      }
     }
   }
   const dupCount = dupContactIds.size;
@@ -227,28 +248,6 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   const { data: leads, count } = await query
     .order("created_at", { ascending: false })
     .range(from, from + PER_PAGE - 1);
-
-  const { count: quarantineCount } = await supabase
-    .from("lead_intake_errors")
-    .select("id", { count: "exact", head: true })
-    .eq("account_id", accountId)
-    .eq("resolved", false);
-
-  // Deep-link ?lead=<id> (desde el push de nuevo lead): resolvemos el
-  // contacto para abrir el panel al montar. El lead puede no estar en la
-  // página actual del paginado, por eso el fetch puntual bajo RLS.
-  const deepLinkLead =
-    typeof params.lead === "string" && params.lead ? params.lead : null;
-  let deepLinkContactId: string | null = null;
-  if (deepLinkLead) {
-    const { data: dl } = await supabase
-      .from("leads")
-      .select("contact_id")
-      .eq("id", deepLinkLead)
-      .eq("account_id", accountId)
-      .maybeSingle();
-    deepLinkContactId = (dl?.contact_id as string | null) ?? null;
-  }
 
   const rows = (leads ?? []) as unknown as LeadRow[];
   const total = count ?? rows.length;
