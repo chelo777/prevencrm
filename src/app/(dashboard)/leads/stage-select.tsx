@@ -1,16 +1,20 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
-import { createClient } from "@/lib/supabase/client";
 
-// Cambio de etapa inline desde la bandeja de leads. Mismo update
-// optimista que el drag del Kanban (deals.stage_id bajo RLS); el
-// feedback CAPI lo levanta el cron igual que con un movimiento en el
-// tablero. Select nativo (en el teléfono abre el picker del sistema)
-// vestido como el chip de etapa, con chevron para que se note que es
-// editable.
+// Cambio de etapa inline desde la bandeja de leads. Select nativo (en el
+// teléfono abre el picker del sistema) vestido como el chip de etapa.
+//
+// Persistimos vía POST /api/leads/stage con `keepalive: true` (NO un update
+// directo del cliente): en el celular la asesora cambia la etapa y enseguida
+// toca WhatsApp (wa.me abre la app y deja la pestaña en segundo plano) o el SO
+// suspende la pestaña. Un update async del navegador se aborta antes de llegar
+// a la base y el cambio se pierde en silencio ("vuelve a Nuevo"). keepalive
+// hace que el request sobreviva a que la pestaña se descargue. Además el
+// endpoint confirma que afectó una fila y refrescamos el server component.
 
 export interface StageOption {
   id: string;
@@ -27,6 +31,7 @@ export function StageSelect({
   stages: StageOption[];
   initialStageId: string;
 }) {
+  const router = useRouter();
   const [stageId, setStageId] = useState(initialStageId);
   const [busy, setBusy] = useState(false);
   const color = stages.find((s) => s.id === stageId)?.color ?? "#94a3b8";
@@ -44,17 +49,29 @@ export function StageSelect({
       toast.info("Abrí el lead y cargá las capitas para sumar el valor a Meta");
     }
 
-    setStageId(next);
+    setStageId(next); // optimista
     setBusy(true);
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("deals")
-      .update({ stage_id: next })
-      .eq("id", dealId);
-    setBusy(false);
-    if (error) {
+    try {
+      const res = await fetch("/api/leads/stage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dealId, stageId: next }),
+        keepalive: true, // sobrevive a que la pestaña pase a segundo plano / se descargue
+      });
+      if (!res.ok) {
+        setStageId(prev);
+        toast.error("No se pudo cambiar la etapa");
+      } else {
+        // Resync del server component: lo mostrado siempre coincide con la base.
+        router.refresh();
+      }
+    } catch {
+      // Si la pestaña se descargó (navegó a WhatsApp), el keepalive completa la
+      // escritura igual server-side; este catch es para fallas reales de red.
       setStageId(prev);
       toast.error("No se pudo cambiar la etapa");
+    } finally {
+      setBusy(false);
     }
   }
 
