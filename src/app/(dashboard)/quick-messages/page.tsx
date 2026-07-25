@@ -24,9 +24,11 @@ import {
 } from "@/lib/quick-messages/render";
 
 // Mensajes rápidos: constructor de plantillas click-to-chat (estilo
-// Privyr). Los gestiona owner/admin; cualquier miembro los usa desde
-// el botón de WhatsApp. Constructor responsivo: formulario y vista
-// previa lado a lado en desktop, apilados en el teléfono.
+// Privyr). PRIVADAS por usuario (migración 046): cada asesor gestiona las
+// SUYAS y las usa desde el botón de WhatsApp, sin pisar las de otros. La RLS
+// filtra por user_id; acá seteamos el user_id al crear. Constructor
+// responsivo: formulario y vista previa lado a lado en desktop, apilados en
+// el teléfono.
 
 interface Draft {
   id: string | null;
@@ -37,8 +39,13 @@ interface Draft {
 const EMPTY_DRAFT: Draft = { id: null, name: "", body: "" };
 
 export default function QuickMessagesPage() {
-  const { accountId, accountRole } = useAuth();
-  const canManage = accountRole === "owner" || accountRole === "admin";
+  const { accountId, accountRole, user } = useAuth();
+  // Cada quien gestiona SUS propias plantillas (RLS por user_id). Cualquier
+  // miembro operativo (no viewer) puede crear/editar/borrar las suyas.
+  const canManage =
+    accountRole === "owner" ||
+    accountRole === "admin" ||
+    accountRole === "agent";
 
   const [items, setItems] = useState<QuickMessage[] | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -83,7 +90,7 @@ export default function QuickMessagesPage() {
   }
 
   async function save() {
-    if (!draft || !accountId) return;
+    if (!draft || !accountId || !user?.id) return;
     const name = draft.name.trim();
     const body = draft.body.trim();
     if (!name || !body) return;
@@ -96,6 +103,7 @@ export default function QuickMessagesPage() {
           .eq("id", draft.id)
       : await supabase.from("quick_messages").insert({
           account_id: accountId,
+          user_id: user.id, // dueño = quien la crea (RLS por-usuario)
           name,
           body,
           position: items?.length ?? 0,
@@ -153,7 +161,8 @@ export default function QuickMessagesPage() {
             Mensajes rápidos
           </h1>
           <p className="text-sm text-muted-foreground">
-            Plantillas que abren WhatsApp con el texto listo para mandar.
+            Tus plantillas para abrir WhatsApp con el texto listo. Son
+            personales: cada asesor tiene las suyas.
           </p>
         </div>
         {canManage && !draft && (
