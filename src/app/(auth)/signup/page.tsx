@@ -68,7 +68,7 @@ function SignupPageInner() {
       ? `${window.location.origin}/join/${encodeURIComponent(inviteToken)}`
       : undefined;
 
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -85,6 +85,27 @@ function SignupPageInner() {
       return;
     }
 
+    // Con auto-confirmación de email, signUp ya devuelve sesión → no hace
+    // falta volver al link ni confirmar por correo. Si vino con invitación,
+    // la aceptamos automáticamente y entramos directo.
+    if (data.session) {
+      if (inviteToken) {
+        const res = await fetch(
+          `/api/invitations/${encodeURIComponent(inviteToken)}/redeem`,
+          { method: "POST" },
+        );
+        // Si el redeem falla (ej. conflicto de datos), mandamos al /join que
+        // muestra el detalle y la salida.
+        window.location.href = res.ok
+          ? "/dashboard"
+          : `/join/${encodeURIComponent(inviteToken)}`;
+        return;
+      }
+      window.location.href = "/dashboard";
+      return;
+    }
+
+    // Sin sesión (confirmación de email activa) → pantalla "revisá tu correo".
     setSuccess(true);
     setLoading(false);
   };
@@ -143,7 +164,7 @@ function SignupPageInner() {
           </CardTitle>
           <CardDescription className="text-muted-foreground">
             {inviteToken
-              ? "Verificá tu correo y después aceptá la invitación a tu equipo."
+              ? "Completá tus datos y entrás directo a tu equipo."
               : "Empezá a usar PrevenCRM"}
           </CardDescription>
         </CardHeader>
