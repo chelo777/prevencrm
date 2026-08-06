@@ -222,33 +222,25 @@ export function createLeadRepository(
       const rows = (members ?? []) as { user_id: string; lead_cap: number | null; receiving_since: string | null }[];
       if (rows.length === 0) return [];
 
-      // Carga actual = deals abiertos del pipeline por asesor.
-      const { data: openDeals, error: openDealsError } = await admin
-        .from("deals").select("assigned_agent_id")
-        .eq("account_id", accountId).eq("pipeline_id", pipelineId)
-        .eq("status", "open").not("assigned_agent_id", "is", null);
-      if (openDealsError) throw openDealsError;
-      const load = new Map<string, number>();
-      for (const d of openDeals ?? []) {
-        const a = d.assigned_agent_id as string; load.set(a, (load.get(a) ?? 0) + 1);
-      }
-
+      // Carga para el reparto = leads RECIBIDOS en el ciclo actual (desde
+      // receiving_since), NO el backlog histórico de deals abiertos. Así dos
+      // asesoras que arrancan juntas se alternan de a uno; el backlog viejo de
+      // una NO hace que todo caiga en la otra. Es el MISMO contador que el
+      // cupo, con lo que ambos quedan consistentes.
       const out: EligibleAgent[] = [];
       for (const r of rows) {
-        if (r.lead_cap != null) {
-          const since = r.receiving_since ?? "1970-01-01";
-          const { count: assigned, error: assignedError } = await admin.from("activity_log")
-            .select("id", { count: "exact", head: true })
-            .eq("user_id", r.user_id).eq("action", "lead_assigned").gte("created_at", since);
-          if (assignedError) throw assignedError;
-          const { count: reclaimed, error: reclaimedError } = await admin.from("activity_log")
-            .select("id", { count: "exact", head: true })
-            .eq("user_id", r.user_id).eq("action", "lead_reclaimed").gte("created_at", since);
-          if (reclaimedError) throw reclaimedError;
-          const received = (assigned ?? 0) - (reclaimed ?? 0);
-          if (received >= r.lead_cap) continue; // auto-apagado por cupo
-        }
-        out.push({ userId: r.user_id, openDeals: load.get(r.user_id) ?? 0 });
+        const since = r.receiving_since ?? "1970-01-01";
+        const { count: assigned, error: assignedError } = await admin.from("activity_log")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", r.user_id).eq("action", "lead_assigned").gte("created_at", since);
+        if (assignedError) throw assignedError;
+        const { count: reclaimed, error: reclaimedError } = await admin.from("activity_log")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", r.user_id).eq("action", "lead_reclaimed").gte("created_at", since);
+        if (reclaimedError) throw reclaimedError;
+        const received = (assigned ?? 0) - (reclaimed ?? 0);
+        if (r.lead_cap != null && received >= r.lead_cap) continue; // auto-apagado por cupo
+        out.push({ userId: r.user_id, openDeals: received });
       }
       return out;
     },
