@@ -9,6 +9,7 @@ import type {
   ClaimedLead,
   EligibleAgent,
   LeadRepository,
+  OpenPackage,
   StaleLead,
 } from "./types";
 
@@ -34,6 +35,10 @@ export class FakeRepo implements LeadRepository {
   ];
   events: { userId: string; dealId: string; kind: AssignEventKind }[] = [];
   stale: StaleLead[] = [];
+  /** Tandas del modo `quota`. `delivered` lo lleva el propio fake al sellar. */
+  packages: (OpenPackage & { status: "open" | "completed" })[] = [];
+  /** Sellos leads.package_id aplicados (leadId -> packageId). */
+  sealed = new Map<string, string>();
   private seq = 0;
   private nid(p: string) {
     return p + ++this.seq;
@@ -87,6 +92,29 @@ export class FakeRepo implements LeadRepository {
   }
   async listEligibleAgents(): Promise<EligibleAgent[]> {
     return this.eligible;
+  }
+  async listOpenPackages(): Promise<OpenPackage[]> {
+    // El adaptador real ya filtra por status/comprador habilitado; el fake
+    // replica eso devolviendo solo las abiertas.
+    return this.packages
+      .filter((p) => p.status === "open")
+      .map(({ packageId, buyerUserId, leadsTarget, delivered, createdAt }) => ({
+        packageId,
+        buyerUserId,
+        leadsTarget,
+        delivered,
+        createdAt,
+      }));
+  }
+  async markPackageCompleted(packageId: string) {
+    const p = this.packages.find((x) => x.packageId === packageId);
+    if (p && p.status === "open") p.status = "completed";
+  }
+  async sealLeadPackage(leadId: string, packageId: string) {
+    if (this.sealed.has(leadId)) return; // no re-sella
+    this.sealed.set(leadId, packageId);
+    const p = this.packages.find((x) => x.packageId === packageId);
+    if (p) p.delivered++;
   }
   async assignDealIfUnassigned(dealId: string, userId: string): Promise<boolean> {
     const d = this.deals.find((x) => x.id === dealId);

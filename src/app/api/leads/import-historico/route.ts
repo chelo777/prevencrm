@@ -66,6 +66,9 @@ export async function POST(request: Request) {
       pipelineId: row.pipeline_id as string,
       defaultStageId: row.default_stage_id as string,
       autoAssign: false,
+      // El import histórico no reparte (autoAssign:false), así que la
+      // estrategia es irrelevante; dejamos la neutral.
+      assignmentStrategy: "least_loaded",
     };
 
     // Mapa de nombre de etapa -> id, del pipeline destino.

@@ -20,12 +20,19 @@ import type {
   IngestResult,
   LeadRepository,
   NormalizedLead,
+  OpenPackage,
 } from "./types";
-import { assignFromPool } from "./assign";
+import { assignByQuota, assignFromPool } from "./assign";
 
 export interface IngestOptions {
-  /** Auto-asignar por least-loaded (config de la fuente). */
+  /** Auto-asignar (config de la fuente). */
   autoAssign: boolean;
+  /**
+   * Cómo repartir (handoff §4). `least_loaded` (default) usa el pozo común;
+   * `quota` reparte contra las tandas compradas y sella leads.package_id.
+   * Se elige por configuración de la fuente; ninguna reemplaza a la otra.
+   */
+  assignmentStrategy?: "least_loaded" | "quota";
   /** Mapa lead_status -> stage_id (config de la fuente). */
   statusToStage?: Record<string, string>;
 }
@@ -53,6 +60,27 @@ export function pickLeastLoaded(
   const min = Math.min(...agents.map((a) => a.openDeals));
   const pool = agents.filter((a) => a.openDeals === min);
   return pool[Math.floor(Math.random() * pool.length)];
+}
+
+/**
+ * Rotación pareja entre tandas abiertas (handoff §4): gana la de MENOS
+ * entregados; empate, la tanda más vieja; empate, al azar. Las que ya
+ * llegaron al cupo quedan fuera (el llamador las cierra).
+ */
+export function pickByQuota(packages: OpenPackage[]): OpenPackage | null {
+  const withRoom = packages.filter((p) => p.delivered < p.leadsTarget);
+  if (withRoom.length === 0) return null;
+
+  const minDelivered = Math.min(...withRoom.map((p) => p.delivered));
+  const leastServed = withRoom.filter((p) => p.delivered === minDelivered);
+  if (leastServed.length === 1) return leastServed[0];
+
+  const oldest = leastServed.reduce(
+    (min, p) => (p.createdAt < min.createdAt ? p : min),
+    leastServed[0],
+  );
+  const tied = leastServed.filter((p) => p.createdAt === oldest.createdAt);
+  return tied[Math.floor(Math.random() * tied.length)];
 }
 
 export async function ingestLead(
@@ -102,9 +130,15 @@ export async function ingestLead(
     initialStageId = deal.stageId;
   }
 
-  // 4. Asignación least-loaded (idempotente + registra el evento de tanda).
+  // 4. Asignación (idempotente + registra el evento de tanda). Con `quota`,
+  //    si no hay tanda abierta el lead queda SIN asignar a propósito: es la
+  //    cola de admin y la señal de que se compra tráfico no vendido (§4.6).
   if (opts.autoAssign) {
-    await assignFromPool(repo, dealId);
+    if (opts.assignmentStrategy === "quota") {
+      await assignByQuota(repo, claimed.leadId, dealId);
+    } else {
+      await assignFromPool(repo, dealId);
+    }
   }
 
   // 5. Finalize.

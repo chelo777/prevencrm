@@ -19,6 +19,7 @@ import type {
   LeadAttribution,
   LeadRepository,
   LeadSourceConfig,
+  OpenPackage,
   StaleLead,
 } from "./types";
 
@@ -245,6 +246,73 @@ export function createLeadRepository(
       return out;
     },
 
+    async listOpenPackages() {
+      // Tandas abiertas de la cuenta + sus compradores habilitados. El gate de
+      // habilitación es el MISMO que el del pozo común (is_lead_buyer +
+      // receiving_leads + no bloqueado): el toggle "Recibe leads" tiene que
+      // frenar la entrega también en modo cuota, si no deja de ser un corte.
+      const { data: pkgs, error: pkgErr } = await admin
+        .from("lead_packages")
+        .select("id, buyer_user_id, leads_target, created_at")
+        .eq("account_id", accountId)
+        .eq("status", "open")
+        .order("created_at", { ascending: true });
+      if (pkgErr) throw pkgErr;
+      if ((pkgs ?? []).length === 0) return [];
+
+      const buyerIds = [...new Set((pkgs ?? []).map((p) => p.buyer_user_id as string))];
+      const { data: buyers, error: buyerErr } = await admin
+        .from("profiles")
+        .select("user_id")
+        .eq("account_id", accountId)
+        .in("user_id", buyerIds)
+        .eq("is_lead_buyer", true)
+        .eq("receiving_leads", true)
+        .eq("blocked", false);
+      if (buyerErr) throw buyerErr;
+      const enabled = new Set((buyers ?? []).map((b) => b.user_id as string));
+
+      const out: OpenPackage[] = [];
+      for (const p of pkgs ?? []) {
+        if (!enabled.has(p.buyer_user_id as string)) continue;
+        // Entregados = leads ya sellados contra esta tanda.
+        const { count, error: cErr } = await admin
+          .from("leads")
+          .select("id", { count: "exact", head: true })
+          .eq("account_id", accountId)
+          .eq("package_id", p.id as string);
+        if (cErr) throw cErr;
+        out.push({
+          packageId: p.id as string,
+          buyerUserId: p.buyer_user_id as string,
+          leadsTarget: Number(p.leads_target),
+          delivered: count ?? 0,
+          createdAt: p.created_at as string,
+        });
+      }
+      return out;
+    },
+
+    async markPackageCompleted(packageId: string) {
+      const { error } = await admin
+        .from("lead_packages")
+        .update({ status: "completed", completed_at: new Date().toISOString() })
+        .eq("id", packageId)
+        .eq("account_id", accountId)
+        .eq("status", "open"); // idempotente: si ya está cerrada, no toca nada
+      if (error) throw error;
+    },
+
+    async sealLeadPackage(leadId: string, packageId: string) {
+      const { error } = await admin
+        .from("leads")
+        .update({ package_id: packageId })
+        .eq("id", leadId)
+        .eq("account_id", accountId)
+        .is("package_id", null); // no re-sella un lead ya entregado
+      if (error) throw error;
+    },
+
     async assignDealIfUnassigned(dealId, userId) {
       const { data, error } = await admin
         .from("deals")
@@ -383,7 +451,7 @@ export async function loadActiveGoogleSheetSources(
   const { data, error } = await admin
     .from("lead_sources")
     .select(
-      "id, account_id, owner_user_id, name, spreadsheet_id, sheet_gid, column_mapping, pipeline_id, default_stage_id, auto_assign",
+      "id, account_id, owner_user_id, name, spreadsheet_id, sheet_gid, column_mapping, pipeline_id, default_stage_id, auto_assign, assignment_strategy",
     )
     .eq("kind", "google_sheet")
     .eq("active", true);
@@ -400,6 +468,8 @@ export async function loadActiveGoogleSheetSources(
     pipelineId: r.pipeline_id as string,
     defaultStageId: r.default_stage_id as string,
     autoAssign: (r.auto_assign as boolean) ?? true,
+    assignmentStrategy:
+      (r.assignment_strategy as "least_loaded" | "quota") ?? "least_loaded",
   }));
 }
 
@@ -418,6 +488,7 @@ export interface MetaApiSourceConfig {
   pipelineId: string;
   defaultStageId: string;
   autoAssign: boolean;
+  assignmentStrategy: "least_loaded" | "quota";
 }
 
 export async function loadActiveMetaApiSources(
@@ -426,7 +497,7 @@ export async function loadActiveMetaApiSources(
   const { data, error } = await admin
     .from("lead_sources")
     .select(
-      "id, account_id, owner_user_id, name, meta_page_id, meta_form_ids, column_mapping, pipeline_id, default_stage_id, auto_assign",
+      "id, account_id, owner_user_id, name, meta_page_id, meta_form_ids, column_mapping, pipeline_id, default_stage_id, auto_assign, assignment_strategy",
     )
     .eq("kind", "meta_api")
     .eq("active", true);
@@ -446,6 +517,8 @@ export async function loadActiveMetaApiSources(
         pipelineId: r.pipeline_id as string,
         defaultStageId: r.default_stage_id as string,
         autoAssign: (r.auto_assign as boolean) ?? true,
+        assignmentStrategy:
+          (r.assignment_strategy as "least_loaded" | "quota") ?? "least_loaded",
       },
     ];
   });
@@ -464,6 +537,7 @@ export function metaSourceAsLeadSource(s: MetaApiSourceConfig): LeadSourceConfig
     pipelineId: s.pipelineId,
     defaultStageId: s.defaultStageId,
     autoAssign: s.autoAssign,
+    assignmentStrategy: s.assignmentStrategy,
   };
 }
 

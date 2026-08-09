@@ -67,6 +67,8 @@ export interface LeadSourceConfig {
   pipelineId: string;
   defaultStageId: string;
   autoAssign: boolean;
+  /** Estrategia de reparto (migración 050). Default: least_loaded. */
+  assignmentStrategy: "least_loaded" | "quota";
 }
 
 /** Overrides opcionales de mapeo (todo auto-detectable si está vacío). */
@@ -120,6 +122,19 @@ export type CanonicalField =
 export interface EligibleAgent {
   userId: string;
   openDeals: number;
+}
+
+/**
+ * Tanda abierta candidata a recibir un lead (estrategia `quota`, handoff §4).
+ * `delivered` = count(leads WHERE package_id = id) al momento de consultar.
+ */
+export interface OpenPackage {
+  packageId: string;
+  buyerUserId: string;
+  leadsTarget: number;
+  delivered: number;
+  /** Desempate: la tanda más vieja primero. */
+  createdAt: string;
 }
 
 /** Lead asignado pero sin trabajar, candidato a reclamo (pozo común). */
@@ -202,6 +217,18 @@ export interface LeadRepository {
    * (recibidos de la tanda derivados de activity_log), no bloqueados.
    */
   listEligibleAgents(): Promise<EligibleAgent[]>;
+
+  /**
+   * Tandas `open` con cupo disponible, de compradores habilitados
+   * (is_lead_buyer, recibiendo, no bloqueados). Estrategia `quota`.
+   */
+  listOpenPackages(): Promise<OpenPackage[]>;
+
+  /** Cierra la tanda al llegar al cupo (idempotente). */
+  markPackageCompleted(packageId: string): Promise<void>;
+
+  /** Sella contra qué tanda se entregó el lead (leads.package_id). */
+  sealLeadPackage(leadId: string, packageId: string): Promise<void>;
 
   /** Asigna el deal a un asesor solo si está sin asignar (idempotente). Devuelve si asignó. */
   assignDealIfUnassigned(dealId: string, userId: string): Promise<boolean>;

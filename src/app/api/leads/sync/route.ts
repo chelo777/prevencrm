@@ -105,6 +105,7 @@ export async function GET(request: Request) {
           }
           const result = await ingestLead(repo, lead, {
             autoAssign: source.autoAssign,
+            assignmentStrategy: source.assignmentStrategy,
             statusToStage: source.columnMapping.statusToStage,
           });
           if (result.outcome === "processed") {
@@ -196,6 +197,7 @@ export async function GET(request: Request) {
               );
               const result = await ingestLead(repo, lead, {
                 autoAssign: source.autoAssign,
+                assignmentStrategy: source.assignmentStrategy,
               });
               if (result.outcome === "processed") {
                 totals.claimed++;
