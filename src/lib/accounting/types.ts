@@ -38,8 +38,22 @@ export interface CampaignInsight {
   metaCampaignId: string;
   campaignName: string | null;
   spend: number | null;
+  /**
+   * Si la campaña cuenta para la contabilidad (gasto Meta + prorrateo del
+   * costo por tanda). Las campañas muertas se apagan para no descontar plata
+   * que ya no genera nada. Migración 052.
+   */
+  tracked: boolean;
   impressions?: number | null;
   clicks?: number | null;
+}
+
+/** Fila de la tabla de campañas del panel (incluye las no medidas). */
+export interface CampaignRow extends CampaignInsight {
+  /** Leads que trajo al CRM. */
+  leads: number;
+  /** spend / leads, o null si todavía no trajo ninguno. */
+  cpl: number | null;
 }
 
 /** Lead entregado contra una tanda — lo mínimo para prorratear el costo. */
@@ -103,7 +117,7 @@ export interface GlobalTotals {
   collected: number;
   /** Deuda pendiente: solo tandas no canceladas y sin contar saldos a favor. */
   owed: number;
-  /** Gasto Meta TOTAL del período (todas las campañas con insight). */
+  /** Gasto Meta de las campañas MEDIDAS (tracked). */
   metaSpend: number;
   /** toCollect − metaSpend */
   margin: number;
@@ -147,4 +161,6 @@ export interface AccountingRepository {
   createPackage(input: CreatePackageInput & { ordinal: number }): Promise<LeadPackage>;
   updatePackage(id: string, input: UpdatePackageInput): Promise<LeadPackage>;
   createPayment(input: CreatePaymentInput): Promise<PackagePayment>;
+  /** Prende/apaga si una campaña se mide (gasto Meta + prorrateo). */
+  setCampaignTracked(metaCampaignId: string, tracked: boolean): Promise<void>;
 }

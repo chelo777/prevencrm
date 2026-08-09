@@ -77,6 +77,11 @@ export class FakeAccountingRepo implements AccountingRepository {
     return pkg;
   }
 
+  async setCampaignTracked(metaCampaignId: string, tracked: boolean) {
+    const c = this.insights.find((i) => i.metaCampaignId === metaCampaignId);
+    if (c) c.tracked = tracked;
+  }
+
   async createPayment(input: CreatePaymentInput) {
     const payment: PackagePayment = {
       id: `pay_${++this.seq}`,

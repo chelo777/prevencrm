@@ -15,12 +15,14 @@ import {
 } from "@/components/ui/table";
 import type {
   BuyerTotals,
+  CampaignRow,
   GlobalTotals,
   PackageMetrics,
   PackagePayment,
   PaymentStatus,
 } from "@/lib/accounting/types";
 import { NewPackageDialog, PaymentDialog, type BuyerOption } from "./package-dialogs";
+import { CampaignsTable } from "./campaigns-table";
 import { fmtDate, money, pct } from "./format";
 
 // Panel de contabilidad. Recibe TODO calculado del server component: acá no se
@@ -77,12 +79,14 @@ export function AccountingPanel({
   packages,
   payments,
   buyers,
+  campaigns,
 }: {
   totals: GlobalTotals;
   buyerTotals: BuyerTotals[];
   packages: PackageMetrics[];
   payments: PackagePayment[];
   buyers: BuyerOption[];
+  campaigns: CampaignRow[];
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -161,7 +165,7 @@ export function AccountingPanel({
         <StatCard
           label="Gasto Meta"
           value={money(totals.metaSpend)}
-          hint="Todas las campañas"
+          hint="Campañas medidas"
         />
         <StatCard
           label="Margen"
@@ -379,6 +383,8 @@ export function AccountingPanel({
           </Table>
         </div>
       )}
+
+      <CampaignsTable campaigns={campaigns} />
 
       <NewPackageDialog
         open={newOpen}

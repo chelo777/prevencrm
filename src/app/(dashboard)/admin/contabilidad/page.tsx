@@ -50,6 +50,7 @@ export default async function ContabilidadPage() {
       packages={snapshot.packages}
       payments={snapshot.payments}
       buyers={buyers}
+      campaigns={snapshot.campaigns}
     />
   );
 }

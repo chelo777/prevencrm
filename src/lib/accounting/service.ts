@@ -13,6 +13,7 @@ import {
 import type {
   AccountingRepository,
   BuyerTotals,
+  CampaignRow,
   CreatePackageInput,
   GlobalTotals,
   LeadPackage,
@@ -25,6 +26,8 @@ export interface AccountingSnapshot {
   buyers: BuyerTotals[];
   totals: GlobalTotals;
   payments: PackagePayment[];
+  /** Todas las campañas con insight (medidas o no), con leads y CPL. */
+  campaigns: CampaignRow[];
 }
 
 /** Foto completa de la contabilidad de la cuenta, ya calculada. */
@@ -48,11 +51,24 @@ export async function loadAccountingSnapshot(
     leadCounts,
   );
 
+  // Tabla de campañas: incluye las apagadas, para poder prenderlas.
+  const campaigns: CampaignRow[] = insights
+    .map((i) => {
+      const leads = leadCounts[i.metaCampaignId] ?? 0;
+      return {
+        ...i,
+        leads,
+        cpl: leads > 0 && i.spend ? Math.round(i.spend / leads) : null,
+      };
+    })
+    .sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0));
+
   return {
     packages: metrics,
     buyers: aggregateByBuyer(metrics),
     totals: aggregateGlobal(metrics, insights),
     payments,
+    campaigns,
   };
 }
 

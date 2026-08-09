@@ -118,7 +118,7 @@ export function createAccountingRepository(
     async listCampaignInsights() {
       const { data, error } = await supabase
         .from("campaign_insights")
-        .select("meta_campaign_id, campaign_name, spend, impressions, clicks")
+        .select("meta_campaign_id, campaign_name, spend, impressions, clicks, tracked")
         .eq("account_id", accountId);
       if (error) throw error;
       return (data ?? []).map(
@@ -126,6 +126,7 @@ export function createAccountingRepository(
           metaCampaignId: r.meta_campaign_id as string,
           campaignName: (r.campaign_name as string | null) ?? null,
           spend: r.spend == null ? null : Number(r.spend),
+          tracked: (r.tracked as boolean | null) ?? true,
           impressions: r.impressions == null ? null : Number(r.impressions),
           clicks: r.clicks == null ? null : Number(r.clicks),
         }),
@@ -196,6 +197,15 @@ export function createAccountingRepository(
         .single();
       if (error) throw error;
       return toPayment(data);
+    },
+
+    async setCampaignTracked(metaCampaignId: string, tracked: boolean) {
+      const { error } = await supabase
+        .from("campaign_insights")
+        .update({ tracked })
+        .eq("account_id", accountId)
+        .eq("meta_campaign_id", metaCampaignId);
+      if (error) throw error;
     },
   };
 }

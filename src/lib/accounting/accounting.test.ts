@@ -71,7 +71,9 @@ describe("saldo y estado de pago", () => {
 // ------------------------------------------------------------
 describe("prorrateo de costo Meta", () => {
   // Campaña A: gastó 100.000 y trajo 100 leads → 1.000 por lead.
-  const insights = [{ metaCampaignId: "A", campaignName: "A", spend: 100000 }];
+  const insights = [
+    { metaCampaignId: "A", campaignName: "A", spend: 100000, tracked: true },
+  ];
   const counts = { A: 100 };
 
   it("costo por lead = spend / leads totales de la campaña", () => {
@@ -163,8 +165,8 @@ describe("totales globales", () => {
   it("margen = a cobrar − gasto Meta TOTAL (incluye tráfico no vendido)", () => {
     const metrics = computeAllPackageMetrics([makePackage()], [], [], [], {});
     const totals = aggregateGlobal(metrics, [
-      { metaCampaignId: "A", campaignName: "A", spend: 80000 },
-      { metaCampaignId: "B", campaignName: "B", spend: 20000 },
+      { metaCampaignId: "A", campaignName: "A", spend: 80000, tracked: true },
+      { metaCampaignId: "B", campaignName: "B", spend: 20000, tracked: true },
     ]);
     expect(totals.metaSpend).toBe(100000);
     expect(totals.margin).toBe(200000);
@@ -193,7 +195,9 @@ describe("servicio", () => {
     repo.payments = [pay("pkg_1", 120000)];
     repo.delivered = [{ packageId: "pkg_1", campaignId: "A" }];
     repo.counts = { A: 10 };
-    repo.insights = [{ metaCampaignId: "A", campaignName: "A", spend: 50000 }];
+    repo.insights = [
+      { metaCampaignId: "A", campaignName: "A", spend: 50000, tracked: true },
+    ];
 
     const snap = await loadAccountingSnapshot(repo);
     expect(snap.packages).toHaveLength(1);
@@ -212,6 +216,38 @@ describe("servicio", () => {
     expect(a1.ordinal).toBe(1);
     expect(a2.ordinal).toBe(2);
     expect(f1.ordinal).toBe(1); // por compradora, no global
+  });
+});
+
+// ------------------------------------------------------------
+// Campañas medidas (tracked)
+// ------------------------------------------------------------
+describe("campañas no medidas", () => {
+  const viva = { metaCampaignId: "viva", campaignName: "viva", spend: 100000, tracked: true };
+  const muerta = { metaCampaignId: "muerta", campaignName: "muerta", spend: 900000, tracked: false };
+  const counts = { viva: 100, muerta: 300 };
+
+  it("no suman al gasto Meta", () => {
+    const totals = aggregateGlobal([], [viva, muerta]);
+    expect(totals.metaSpend).toBe(100000); // la muerta queda afuera
+  });
+
+  it("sus leads no cargan costo prorrateado", () => {
+    const cpl = campaignCostPerLead([viva, muerta], counts);
+    expect(cpl.get("viva")).toBe(1000);
+    expect(cpl.has("muerta")).toBe(false);
+
+    const metrics = computeAllPackageMetrics(
+      [makePackage()],
+      [],
+      [
+        { packageId: "pkg_1", campaignId: "viva" },
+        { packageId: "pkg_1", campaignId: "muerta" },
+      ],
+      [viva, muerta],
+      counts,
+    );
+    expect(metrics[0].metaCost).toBe(1000); // solo el lead de la campaña medida
   });
 });
 

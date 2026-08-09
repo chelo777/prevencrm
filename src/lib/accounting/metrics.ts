@@ -50,6 +50,8 @@ export function campaignCostPerLead(
 ): Map<string, number> {
   const out = new Map<string, number>();
   for (const ins of insights) {
+    // Campaña no medida: sus leads no cargan costo (ver `tracked`, 052).
+    if (!ins.tracked) continue;
     const spend = ins.spend ?? 0;
     const total = leadCountByCampaign[ins.metaCampaignId] ?? 0;
     if (spend <= 0 || total <= 0) continue;
@@ -193,9 +195,10 @@ export function aggregateByBuyer(metrics: PackageMetrics[]): BuyerTotals[] {
 /**
  * Totales globales de la cabecera.
  *
- * `metaSpend` es el gasto REAL de todas las campañas con insight, no solo el
+ * `metaSpend` es el gasto REAL de las campañas MEDIDAS (tracked), no solo el
  * atribuido a tandas: si se compra tráfico que todavía no está vendido, el
- * margen tiene que mostrarlo (es la señal de negocio del handoff §4).
+ * margen tiene que mostrarlo (es la señal de negocio del handoff §4). Las
+ * campañas apagadas quedan fuera por completo.
  * `owed` ignora los saldos a favor (una tanda sobrepagada no descuenta la
  * deuda de otra).
  */
@@ -209,7 +212,9 @@ export function aggregateGlobal(
   const owed = round2(
     active.reduce((s, m) => s + Math.max(0, m.balance), 0),
   );
-  const metaSpend = round2(insights.reduce((s, i) => s + (i.spend ?? 0), 0));
+  const metaSpend = round2(
+    insights.filter((i) => i.tracked).reduce((s, i) => s + (i.spend ?? 0), 0),
+  );
 
   return {
     toCollect,
