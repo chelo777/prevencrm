@@ -20,6 +20,7 @@ import {
 import { ingestLead } from "@/lib/leads/ingest";
 import { reconcileAllCapi } from "@/lib/leads/capi";
 import { reclaimStaleLeads } from "@/lib/leads/reclaim";
+import { syncCampaignInsights } from "@/lib/leads/insights";
 import { notifyNewLeads } from "@/lib/push/lead-alerts";
 
 // Node runtime: usamos node:crypto (JWT de Google + SHA-256 de CAPI).
@@ -244,6 +245,15 @@ export async function GET(request: Request) {
     console.error("[leads/sync] error en reconciliación CAPI:", capiErr);
   }
 
+  // Gasto por campaña (alimenta el costo Meta de la contabilidad) — best
+  // effort: si la Graph API falla, la corrida de leads no se cae.
+  let insights = { campaigns: 0, updated: 0, failed: 0 };
+  try {
+    insights = await syncCampaignInsights(admin);
+  } catch (insErr) {
+    console.error("[leads/sync] error sincronizando insights:", insErr);
+  }
+
   // Push "nuevo lead" al teléfono — best effort, nunca voltea la corrida.
   try {
     for (const accountId of newLeadAccounts) {
@@ -253,5 +263,5 @@ export async function GET(request: Request) {
     console.error("[leads/sync] error enviando push:", pushErr);
   }
 
-  return NextResponse.json({ sources: perSource, capi });
+  return NextResponse.json({ sources: perSource, capi, insights });
 }

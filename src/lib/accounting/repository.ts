@@ -1,0 +1,201 @@
+// ============================================================
+// Adaptador Supabase del puerto AccountingRepository.
+//
+// Recibe el cliente YA scopeado del llamador: las rutas API pasan el cliente
+// de sesión (RLS admin-only es el muro real) y el cron pasa service role.
+// ============================================================
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type {
+  AccountingRepository,
+  CampaignInsight,
+  CreatePackageInput,
+  CreatePaymentInput,
+  DeliveredLead,
+  LeadPackage,
+  PackagePayment,
+  PackageStatus,
+  UpdatePackageInput,
+} from "./types";
+
+type Row = Record<string, unknown>;
+
+function toPackage(r: Row): LeadPackage {
+  return {
+    id: r.id as string,
+    accountId: r.account_id as string,
+    buyerUserId: r.buyer_user_id as string,
+    ordinal: Number(r.ordinal),
+    leadsTarget: Number(r.leads_target),
+    price: Number(r.price),
+    currency: (r.currency as string) ?? "ARS",
+    status: r.status as PackageStatus,
+    committedAt: (r.committed_at as string | null) ?? null,
+    createdAt: r.created_at as string,
+    completedAt: (r.completed_at as string | null) ?? null,
+  };
+}
+
+function toPayment(r: Row): PackagePayment {
+  return {
+    id: r.id as string,
+    packageId: r.package_id as string,
+    paidOn: r.paid_on as string,
+    amount: Number(r.amount),
+    note: (r.note as string | null) ?? null,
+  };
+}
+
+export function createAccountingRepository(
+  supabase: SupabaseClient,
+  accountId: string,
+): AccountingRepository {
+  return {
+    async listPackages() {
+      const { data, error } = await supabase
+        .from("lead_packages")
+        .select("*")
+        .eq("account_id", accountId)
+        .order("buyer_user_id")
+        .order("ordinal");
+      if (error) throw error;
+      return (data ?? []).map(toPackage);
+    },
+
+    async listPayments() {
+      // Los pagos no tienen account_id: se acotan por sus paquetes (que sí lo
+      // tienen) — el mismo gate que aplica la RLS.
+      const { data: pkgs, error: pkgErr } = await supabase
+        .from("lead_packages")
+        .select("id")
+        .eq("account_id", accountId);
+      if (pkgErr) throw pkgErr;
+      const ids = (pkgs ?? []).map((p) => p.id as string);
+      if (ids.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from("lead_package_payments")
+        .select("*")
+        .in("package_id", ids)
+        .order("paid_on");
+      if (error) throw error;
+      return (data ?? []).map(toPayment);
+    },
+
+    async listDeliveredLeads() {
+      const { data, error } = await supabase
+        .from("leads")
+        .select("package_id, campaign_id")
+        .eq("account_id", accountId)
+        .not("package_id", "is", null);
+      if (error) throw error;
+      return (data ?? []).map(
+        (r): DeliveredLead => ({
+          packageId: r.package_id as string,
+          campaignId: (r.campaign_id as string | null) ?? null,
+        }),
+      );
+    },
+
+    async leadCountByCampaign() {
+      // Denominador del prorrateo. Escaneo de UNA columna de texto sobre los
+      // leads de la cuenta (mismo criterio que el chequeo de duplicados de
+      // /leads): liviano y sin traer payloads.
+      const { data, error } = await supabase
+        .from("leads")
+        .select("campaign_id")
+        .eq("account_id", accountId)
+        .not("campaign_id", "is", null);
+      if (error) throw error;
+      const counts: Record<string, number> = {};
+      for (const r of data ?? []) {
+        const id = r.campaign_id as string;
+        counts[id] = (counts[id] ?? 0) + 1;
+      }
+      return counts;
+    },
+
+    async listCampaignInsights() {
+      const { data, error } = await supabase
+        .from("campaign_insights")
+        .select("meta_campaign_id, campaign_name, spend, impressions, clicks")
+        .eq("account_id", accountId);
+      if (error) throw error;
+      return (data ?? []).map(
+        (r): CampaignInsight => ({
+          metaCampaignId: r.meta_campaign_id as string,
+          campaignName: (r.campaign_name as string | null) ?? null,
+          spend: r.spend == null ? null : Number(r.spend),
+          impressions: r.impressions == null ? null : Number(r.impressions),
+          clicks: r.clicks == null ? null : Number(r.clicks),
+        }),
+      );
+    },
+
+    async nextOrdinal(buyerUserId: string) {
+      const { data, error } = await supabase
+        .from("lead_packages")
+        .select("ordinal")
+        .eq("account_id", accountId)
+        .eq("buyer_user_id", buyerUserId)
+        .order("ordinal", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? Number(data.ordinal) + 1 : 1;
+    },
+
+    async createPackage(input: CreatePackageInput & { ordinal: number }) {
+      const { data, error } = await supabase
+        .from("lead_packages")
+        .insert({
+          account_id: accountId,
+          buyer_user_id: input.buyerUserId,
+          ordinal: input.ordinal,
+          leads_target: input.leadsTarget,
+          price: input.price,
+          committed_at: input.committedAt,
+        })
+        .select("*")
+        .single();
+      if (error) throw error;
+      return toPackage(data);
+    },
+
+    async updatePackage(id: string, input: UpdatePackageInput) {
+      const patch: Row = {};
+      if (input.leadsTarget !== undefined) patch.leads_target = input.leadsTarget;
+      if (input.price !== undefined) patch.price = input.price;
+      if (input.committedAt !== undefined) patch.committed_at = input.committedAt;
+      if (input.status !== undefined) {
+        patch.status = input.status;
+        patch.completed_at =
+          input.status === "completed" ? new Date().toISOString() : null;
+      }
+      const { data, error } = await supabase
+        .from("lead_packages")
+        .update(patch)
+        .eq("id", id)
+        .eq("account_id", accountId)
+        .select("*")
+        .single();
+      if (error) throw error;
+      return toPackage(data);
+    },
+
+    async createPayment(input: CreatePaymentInput) {
+      const { data, error } = await supabase
+        .from("lead_package_payments")
+        .insert({
+          package_id: input.packageId,
+          paid_on: input.paidOn,
+          amount: input.amount,
+          note: input.note,
+        })
+        .select("*")
+        .single();
+      if (error) throw error;
+      return toPayment(data);
+    },
+  };
+}

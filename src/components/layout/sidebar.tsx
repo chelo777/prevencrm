@@ -23,6 +23,7 @@ import {
   UserCog,
   Users,
   UsersRound,
+  Wallet,
   Workflow,
   X,
   Zap,
@@ -89,6 +90,12 @@ interface NavItem {
    * Purely informational — doesn't affect routing or access.
    */
   beta?: boolean;
+  /**
+   * Ítem fuera del gating por módulos (su primer segmento no es un
+   * ModuleSlug): se muestra solo a admin/owner. La ruta corta igual
+   * server-side y la RLS es el muro real.
+   */
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -102,6 +109,12 @@ const navItems: NavItem[] = [
   { href: "/broadcasts", label: "Difusiones", icon: Radio },
   { href: "/automations", label: "Automatizaciones", icon: Zap },
   { href: "/flows", label: "Flows", icon: Workflow, beta: true },
+  {
+    href: "/admin/contabilidad",
+    label: "Contabilidad",
+    icon: Wallet,
+    adminOnly: true,
+  },
 ];
 
 const bottomNavItems = [
@@ -129,10 +142,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           effectiveModules(accountRole, allowedModules),
         );
         return navItems.filter((item) =>
-          allowed.has(item.href.split("/").filter(Boolean)[0] as ModuleSlug),
+          item.adminOnly
+            ? accountRole === "owner" || accountRole === "admin"
+            : allowed.has(item.href.split("/").filter(Boolean)[0] as ModuleSlug),
         );
       })()
-    : navItems;
+    : navItems.filter((item) => !item.adminOnly);
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
   // Only surface the account-name strip when it actually carries
