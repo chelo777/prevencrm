@@ -8,6 +8,18 @@
 
 export type PackageStatus = "open" | "completed" | "cancelled";
 
+/**
+ * Rango de fechas del panel (YYYY-MM-DD, inclusive). `null` en ambos = todo el
+ * histórico. Cuando hay rango, TODO el panel habla de ese período: gasto Meta
+ * (del desglose diario), leads, tandas (por fecha de alta) y pagos (por fecha
+ * de pago). Mezclar períodos entre numerador y denominador daría métricas
+ * falsas, así que o filtra todo o no filtra nada.
+ */
+export interface DateRange {
+  since: string | null;
+  until: string | null;
+}
+
 /** Estado de pago DERIVADO (no se persiste): sale de price vs. pagado. */
 export type PaymentStatus = "PAGADO" | "PARCIAL" | "DEBE";
 

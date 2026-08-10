@@ -4,6 +4,7 @@ import { hasMinRole } from "@/lib/auth/roles";
 import { createAccountingRepository } from "@/lib/accounting/repository";
 import { loadAccountingSnapshot } from "@/lib/accounting/service";
 import { AccountingPanel } from "@/components/accounting/accounting-panel";
+import { rangeFromParams, rangeLabel } from "@/lib/accounting/date-range";
 
 export const dynamic = "force-dynamic";
 
@@ -16,11 +17,23 @@ export const dynamic = "force-dynamic";
 // El gating por módulos no cubre /admin (no es un slug de MODULES), así que
 // el corte de rol vive acá y en cada ruta API (requireRole('admin')).
 
-export default async function ContabilidadPage() {
+export default async function ContabilidadPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const { supabase, accountId, role } = await getCurrentAccount();
   if (!hasMinRole(role, "admin")) redirect("/leads");
 
-  const repo = createAccountingRepository(supabase, accountId);
+  const params = await searchParams;
+  const str = (v: string | string[] | undefined) =>
+    typeof v === "string" ? v : null;
+  const { preset, range } = rangeFromParams(
+    { periodo: str(params.periodo), desde: str(params.desde), hasta: str(params.hasta) },
+    new Date(),
+  );
+
+  const repo = createAccountingRepository(supabase, accountId, range);
   const snapshot = await loadAccountingSnapshot(repo);
 
   // Nombres de las compradoras para la tabla (is_lead_buyer marca quién
@@ -51,6 +64,9 @@ export default async function ContabilidadPage() {
       payments={snapshot.payments}
       buyers={buyers}
       campaigns={snapshot.campaigns}
+      preset={preset}
+      range={range}
+      periodLabel={rangeLabel(preset, range)}
     />
   );
 }

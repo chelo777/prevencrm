@@ -11,6 +11,7 @@ import type {
   CampaignInsight,
   CreatePackageInput,
   CreatePaymentInput,
+  DateRange,
   DeliveredLead,
   LeadPackage,
   PackagePayment,
@@ -46,18 +47,26 @@ function toPayment(r: Row): PackagePayment {
   };
 }
 
+const NO_RANGE: DateRange = { since: null, until: null };
+
 export function createAccountingRepository(
   supabase: SupabaseClient,
   accountId: string,
+  range: DateRange = NO_RANGE,
 ): AccountingRepository {
+  const hasRange = Boolean(range.since || range.until);
+  // `until` es inclusive: sobre timestamps hay que cubrir el día entero.
+  const untilTs = range.until ? `${range.until}T23:59:59.999Z` : null;
+
   return {
     async listPackages() {
-      const { data, error } = await supabase
+      let q = supabase
         .from("lead_packages")
         .select("*")
-        .eq("account_id", accountId)
-        .order("buyer_user_id")
-        .order("ordinal");
+        .eq("account_id", accountId);
+      if (range.since) q = q.gte("created_at", range.since);
+      if (untilTs) q = q.lte("created_at", untilTs);
+      const { data, error } = await q.order("buyer_user_id").order("ordinal");
       if (error) throw error;
       return (data ?? []).map(toPackage);
     },
@@ -73,21 +82,26 @@ export function createAccountingRepository(
       const ids = (pkgs ?? []).map((p) => p.id as string);
       if (ids.length === 0) return [];
 
-      const { data, error } = await supabase
+      let q = supabase
         .from("lead_package_payments")
         .select("*")
-        .in("package_id", ids)
-        .order("paid_on");
+        .in("package_id", ids);
+      if (range.since) q = q.gte("paid_on", range.since);
+      if (range.until) q = q.lte("paid_on", range.until);
+      const { data, error } = await q.order("paid_on");
       if (error) throw error;
       return (data ?? []).map(toPayment);
     },
 
     async listDeliveredLeads() {
-      const { data, error } = await supabase
+      let q = supabase
         .from("leads")
         .select("package_id, campaign_id")
         .eq("account_id", accountId)
         .not("package_id", "is", null);
+      if (range.since) q = q.gte("created_at", range.since);
+      if (untilTs) q = q.lte("created_at", untilTs);
+      const { data, error } = await q;
       if (error) throw error;
       return (data ?? []).map(
         (r): DeliveredLead => ({
@@ -101,11 +115,14 @@ export function createAccountingRepository(
       // Denominador del prorrateo. Escaneo de UNA columna de texto sobre los
       // leads de la cuenta (mismo criterio que el chequeo de duplicados de
       // /leads): liviano y sin traer payloads.
-      const { data, error } = await supabase
+      let q = supabase
         .from("leads")
         .select("campaign_id")
         .eq("account_id", accountId)
         .not("campaign_id", "is", null);
+      if (range.since) q = q.gte("created_at", range.since);
+      if (untilTs) q = q.lte("created_at", untilTs);
+      const { data, error } = await q;
       if (error) throw error;
       const counts: Record<string, number> = {};
       for (const r of data ?? []) {
@@ -116,12 +133,14 @@ export function createAccountingRepository(
     },
 
     async listCampaignInsights() {
+      // Catálogo: nombre y si se mide. El gasto sale de acá solo cuando NO hay
+      // rango (es el lifetime que reporta Meta).
       const { data, error } = await supabase
         .from("campaign_insights")
         .select("meta_campaign_id, campaign_name, spend, impressions, clicks, tracked")
         .eq("account_id", accountId);
       if (error) throw error;
-      return (data ?? []).map(
+      const base = (data ?? []).map(
         (r): CampaignInsight => ({
           metaCampaignId: r.meta_campaign_id as string,
           campaignName: (r.campaign_name as string | null) ?? null,
@@ -131,6 +150,36 @@ export function createAccountingRepository(
           clicks: r.clicks == null ? null : Number(r.clicks),
         }),
       );
+      if (!hasRange) return base;
+
+      // Con rango, el gasto se recompone sumando los días del período.
+      let dq = supabase
+        .from("campaign_insights_daily")
+        .select("meta_campaign_id, spend, impressions, clicks")
+        .eq("account_id", accountId);
+      if (range.since) dq = dq.gte("day", range.since);
+      if (range.until) dq = dq.lte("day", range.until);
+      const { data: daily, error: dailyErr } = await dq;
+      if (dailyErr) throw dailyErr;
+
+      const agg = new Map<string, { spend: number; impressions: number; clicks: number }>();
+      for (const d of daily ?? []) {
+        const id = d.meta_campaign_id as string;
+        const acc = agg.get(id) ?? { spend: 0, impressions: 0, clicks: 0 };
+        acc.spend += Number(d.spend ?? 0);
+        acc.impressions += Number(d.impressions ?? 0);
+        acc.clicks += Number(d.clicks ?? 0);
+        agg.set(id, acc);
+      }
+      return base.map((c) => {
+        const a = agg.get(c.metaCampaignId);
+        return {
+          ...c,
+          spend: a ? a.spend : 0, // sin días en el período: no gastó nada
+          impressions: a ? a.impressions : 0,
+          clicks: a ? a.clicks : 0,
+        };
+      });
     },
 
     async nextOrdinal(buyerUserId: string) {

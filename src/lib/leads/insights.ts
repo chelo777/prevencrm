@@ -18,7 +18,21 @@ export interface InsightsTotals {
   campaigns: number;
   updated: number;
   failed: number;
+  /** Filas día-campaña guardadas en campaign_insights_daily. */
+  dailyRows: number;
 }
+
+/**
+ * Ventana del desglose diario.
+ *
+ * En cada corrida se refrescan los últimos RECENT_DAYS días: los números de
+ * Meta se siguen moviendo unos días (atribución tardía), los viejos ya están
+ * firmes. Si una campaña todavía no tiene NINGÚN día guardado se hace el
+ * backfill completo desde BACKFILL_SINCE — así no se re-baja toda la historia
+ * cada 2 minutos.
+ */
+const RECENT_DAYS = 14;
+const BACKFILL_SINCE = "2026-01-01";
 
 interface InsightRow {
   campaign_name?: string;
@@ -57,6 +71,44 @@ async function fetchCampaignInsight(
   return json.data?.[0] ?? null;
 }
 
+interface DailyRow {
+  date_start?: string;
+  spend?: string;
+  impressions?: string;
+  clicks?: string;
+}
+
+/** Serie diaria de una campaña entre dos fechas (YYYY-MM-DD, inclusive). */
+async function fetchCampaignDaily(
+  campaignId: string,
+  token: string,
+  since: string,
+  until: string,
+): Promise<DailyRow[]> {
+  const params = new URLSearchParams({
+    fields: "spend,impressions,clicks",
+    time_increment: "1",
+    time_range: JSON.stringify({ since, until }),
+    limit: "500",
+    access_token: token,
+  });
+  const res = await fetch(`${GRAPH}/${campaignId}/insights?${params}`);
+  const json = (await res.json().catch(() => ({}))) as {
+    data?: DailyRow[];
+    error?: { message?: string; code?: number };
+  };
+  if (!res.ok || json.error) {
+    throw new Error(
+      `Graph error ${json.error?.code ?? res.status}: ${json.error?.message ?? "insights diarios"}`,
+    );
+  }
+  return json.data ?? [];
+}
+
+function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 /**
  * Refresca campaign_insights de todas las cuentas que tengan leads con
  * atribución de campaña. Best-effort por campaña: una que falle no voltea el
@@ -65,7 +117,7 @@ async function fetchCampaignInsight(
 export async function syncCampaignInsights(
   admin: SupabaseClient,
 ): Promise<InsightsTotals> {
-  const totals: InsightsTotals = { campaigns: 0, updated: 0, failed: 0 };
+  const totals: InsightsTotals = { campaigns: 0, updated: 0, failed: 0, dailyRows: 0 };
   const token = process.env.META_LEADS_ACCESS_TOKEN;
   if (!token) return totals; // sin token no hay insights — no-op silencioso.
 
@@ -106,6 +158,43 @@ export async function syncCampaignInsights(
       );
       if (upsertErr) throw upsertErr;
       totals.updated++;
+
+      // ---- Desglose diario (alimenta el filtro de fechas del panel) ----
+      // Backfill completo solo la primera vez; después, ventana reciente.
+      const { count: haveDays } = await admin
+        .from("campaign_insights_daily")
+        .select("id", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .eq("meta_campaign_id", campaignId);
+      const since =
+        (haveDays ?? 0) === 0
+          ? BACKFILL_SINCE
+          : isoDay(new Date(Date.now() - RECENT_DAYS * 86400_000));
+      const until = isoDay(new Date());
+
+      const days = await fetchCampaignDaily(campaignId, token, since, until);
+      if (days.length > 0) {
+        const rows = days.flatMap((d) =>
+          d.date_start
+            ? [
+                {
+                  account_id: accountId,
+                  meta_campaign_id: campaignId,
+                  day: d.date_start,
+                  spend: num(d.spend),
+                  impressions: num(d.impressions),
+                  clicks: num(d.clicks),
+                  fetched_at: new Date().toISOString(),
+                },
+              ]
+            : [],
+        );
+        const { error: dailyErr } = await admin
+          .from("campaign_insights_daily")
+          .upsert(rows, { onConflict: "account_id,meta_campaign_id,day" });
+        if (dailyErr) throw dailyErr;
+        totals.dailyRows += rows.length;
+      }
     } catch (err) {
       totals.failed++;
       console.error(`[insights] campaña ${campaignId}:`, err);

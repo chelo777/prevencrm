@@ -16,6 +16,7 @@ import {
 import type {
   BuyerTotals,
   CampaignRow,
+  DateRange,
   GlobalTotals,
   PackageMetrics,
   PackagePayment,
@@ -23,6 +24,8 @@ import type {
 } from "@/lib/accounting/types";
 import { NewPackageDialog, PaymentDialog, type BuyerOption } from "./package-dialogs";
 import { CampaignsTable } from "./campaigns-table";
+import { DateFilter } from "./date-filter";
+import type { PeriodPreset } from "@/lib/accounting/date-range";
 import { fmtDate, money, pct } from "./format";
 
 // Panel de contabilidad. Recibe TODO calculado del server component: acá no se
@@ -80,6 +83,9 @@ export function AccountingPanel({
   payments,
   buyers,
   campaigns,
+  preset,
+  range,
+  periodLabel,
 }: {
   totals: GlobalTotals;
   buyerTotals: BuyerTotals[];
@@ -87,6 +93,9 @@ export function AccountingPanel({
   payments: PackagePayment[];
   buyers: BuyerOption[];
   campaigns: CampaignRow[];
+  preset: PeriodPreset;
+  range: DateRange;
+  periodLabel: string;
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -144,7 +153,8 @@ export function AccountingPanel({
         <div>
           <h1 className="text-xl font-semibold text-foreground">Contabilidad</h1>
           <p className="text-sm text-muted-foreground">
-            Tandas de datos compradas por cada asesora, pagos y margen.
+            Tandas, pagos y margen —{" "}
+            <span className="text-foreground">{periodLabel}</span>
           </p>
         </div>
         <Button onClick={() => setNewOpen(true)}>
@@ -152,6 +162,8 @@ export function AccountingPanel({
           Nueva tanda
         </Button>
       </div>
+
+      <DateFilter preset={preset} range={range} />
 
       {/* Totales globales */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
