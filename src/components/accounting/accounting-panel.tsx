@@ -154,7 +154,7 @@ export function AccountingPanel({
       </div>
 
       {/* Totales globales */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
         <StatCard label="A cobrar" value={money(totals.toCollect)} />
         <StatCard label="Cobrado" value={money(totals.collected)} tone="positive" />
         <StatCard
@@ -166,6 +166,11 @@ export function AccountingPanel({
           label="Gasto Meta"
           value={money(totals.metaSpend)}
           hint="Campañas medidas"
+        />
+        <StatCard
+          label="Costo por lead"
+          value={totals.costPerLead == null ? "—" : money(totals.costPerLead)}
+          hint={`${totals.trackedLeads} leads medidos`}
         />
         <StatCard
           label="Margen"

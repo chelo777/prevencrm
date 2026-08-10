@@ -119,6 +119,10 @@ export interface GlobalTotals {
   owed: number;
   /** Gasto Meta de las campañas MEDIDAS (tracked). */
   metaSpend: number;
+  /** Leads que trajeron las campañas medidas (denominador del costo por lead). */
+  trackedLeads: number;
+  /** metaSpend / trackedLeads — lo que sale cada lead. null si no hay leads. */
+  costPerLead: number | null;
   /** toCollect − metaSpend */
   margin: number;
 }

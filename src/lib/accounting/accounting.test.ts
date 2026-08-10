@@ -232,6 +232,19 @@ describe("campañas no medidas", () => {
     expect(totals.metaSpend).toBe(100000); // la muerta queda afuera
   });
 
+  it("no cuentan en el costo por lead (numerador y denominador van juntos)", () => {
+    const totals = aggregateGlobal([], [viva, muerta], counts);
+    expect(totals.metaSpend).toBe(100000);
+    expect(totals.trackedLeads).toBe(100); // los 300 de la muerta no entran
+    expect(totals.costPerLead).toBe(1000);
+  });
+
+  it("sin leads medidos, el costo por lead es null (no NaN ni división por cero)", () => {
+    const totals = aggregateGlobal([], [viva], {});
+    expect(totals.trackedLeads).toBe(0);
+    expect(totals.costPerLead).toBeNull();
+  });
+
   it("sus leads no cargan costo prorrateado", () => {
     const cpl = campaignCostPerLead([viva, muerta], counts);
     expect(cpl.get("viva")).toBe(1000);

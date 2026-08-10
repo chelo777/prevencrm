@@ -66,7 +66,7 @@ export async function loadAccountingSnapshot(
   return {
     packages: metrics,
     buyers: aggregateByBuyer(metrics),
-    totals: aggregateGlobal(metrics, insights),
+    totals: aggregateGlobal(metrics, insights, leadCounts),
     payments,
     campaigns,
   };

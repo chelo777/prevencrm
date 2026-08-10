@@ -205,6 +205,7 @@ export function aggregateByBuyer(metrics: PackageMetrics[]): BuyerTotals[] {
 export function aggregateGlobal(
   metrics: PackageMetrics[],
   insights: CampaignInsight[],
+  leadCountByCampaign: Record<string, number> = {},
 ): GlobalTotals {
   const active = metrics.filter((m) => m.status !== "cancelled");
   const toCollect = round2(active.reduce((s, m) => s + m.price, 0));
@@ -212,8 +213,13 @@ export function aggregateGlobal(
   const owed = round2(
     active.reduce((s, m) => s + Math.max(0, m.balance), 0),
   );
-  const metaSpend = round2(
-    insights.filter((i) => i.tracked).reduce((s, i) => s + (i.spend ?? 0), 0),
+  const tracked = insights.filter((i) => i.tracked);
+  const metaSpend = round2(tracked.reduce((s, i) => s + (i.spend ?? 0), 0));
+  // Denominador del costo por lead: los leads de las campañas MEDIDAS, para
+  // que numerador y denominador hablen del mismo universo.
+  const trackedLeads = tracked.reduce(
+    (s, i) => s + (leadCountByCampaign[i.metaCampaignId] ?? 0),
+    0,
   );
 
   return {
@@ -221,6 +227,8 @@ export function aggregateGlobal(
     collected,
     owed,
     metaSpend,
+    trackedLeads,
+    costPerLead: trackedLeads > 0 ? round2(metaSpend / trackedLeads) : null,
     margin: round2(toCollect - metaSpend),
   };
 }
