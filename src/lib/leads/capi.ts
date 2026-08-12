@@ -254,18 +254,35 @@ export async function reconcileCapiForAccount(
     .eq("account_id", config.account_id)
     .in("deal_id", dealIds);
 
+  // Estado de los eventos YA registrados para estos leads, en UNA consulta.
+  // Antes se preguntaba de a un lead por vez (N+1): con ~500 deals en etapas
+  // disparadoras eso eran ~500 consultas por corrida, cada 2 minutos, casi
+  // todas para descubrir que el evento ya estaba enviado. Ese derroche fue lo
+  // que voló la cuota de tráfico de Supabase (2026-08-09).
+  const leadIds = (leads ?? []).map((l) => l.id as string);
+  const statusByLead = new Map<string, string>();
+  if (leadIds.length > 0) {
+    // Se pagina de a 500 ids: un `in` gigante no entra en la URL.
+    for (let i = 0; i < leadIds.length; i += 500) {
+      const { data: rows } = await admin
+        .from("lead_capi_events")
+        .select("lead_id, status")
+        .eq("event_name", config.event_name)
+        .in("lead_id", leadIds.slice(i, i + 500));
+      for (const r of rows ?? []) {
+        statusByLead.set(r.lead_id as string, r.status as string);
+      }
+    }
+  }
+
   for (const lead of leads ?? []) {
     const leadId = lead.id as string;
     const eventId = `${leadId}:${config.event_name}`;
 
     // ¿Ya enviado? (idempotencia por UNIQUE(lead_id, event_name)).
-    const { data: existing } = await admin
-      .from("lead_capi_events")
-      .select("id, status")
-      .eq("lead_id", leadId)
-      .eq("event_name", config.event_name)
-      .maybeSingle();
-    if (existing?.status === "sent") {
+    const existingStatus = statusByLead.get(leadId);
+    const existing = existingStatus ? { status: existingStatus } : null;
+    if (existingStatus === "sent") {
       totals.skipped++;
       continue;
     }

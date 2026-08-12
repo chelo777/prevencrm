@@ -33,6 +33,8 @@ export interface InsightsTotals {
  */
 const RECENT_DAYS = 14;
 const BACKFILL_SINCE = "2026-01-01";
+/** Cada cuánto se refresca el gasto (el cron corre mucho más seguido). */
+const REFRESH_MINUTES = 30;
 
 interface InsightRow {
   campaign_name?: string;
@@ -120,6 +122,20 @@ export async function syncCampaignInsights(
   const totals: InsightsTotals = { campaigns: 0, updated: 0, failed: 0, dailyRows: 0 };
   const token = process.env.META_LEADS_ACCESS_TOKEN;
   if (!token) return totals; // sin token no hay insights — no-op silencioso.
+
+  // Throttle: el gasto de Meta no cambia cada 2 minutos, y refrescarlo tan
+  // seguido escanea TODOS los leads más una consulta por campaña en cada
+  // corrida del cron. Con REFRESH_MINUTES alcanza y el tráfico baja ~15x.
+  const { data: last } = await admin
+    .from("campaign_insights")
+    .select("fetched_at")
+    .order("fetched_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (last?.fetched_at) {
+    const age = Date.now() - new Date(last.fetched_at as string).getTime();
+    if (age < REFRESH_MINUTES * 60_000) return totals;
+  }
 
   const { data: rows, error } = await admin
     .from("leads")
