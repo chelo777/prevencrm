@@ -35,6 +35,10 @@ export class FakeAccountingRepo implements AccountingRepository {
   counts: Record<string, number> = {};
   insights: CampaignInsight[] = [];
   private seq = 0;
+  /** Cuántos leads se soltaron y en qué orden pasaron las operaciones —
+   *  el orden es parte del contrato (ver deletePackage). */
+  unlinkedLeads = 0;
+  opLog: string[] = [];
 
   async listPackages() {
     return this.packages;
@@ -75,6 +79,22 @@ export class FakeAccountingRepo implements AccountingRepository {
     if (!pkg) throw new Error("not found");
     Object.assign(pkg, input);
     return pkg;
+  }
+
+  async unlinkLeadsFromPackage(id: string) {
+    this.opLog.push(`unlink:${id}`);
+    const before = this.delivered.length;
+    this.delivered = this.delivered.filter((l) => l.packageId !== id);
+    const freed = before - this.delivered.length;
+    this.unlinkedLeads += freed;
+    return freed;
+  }
+
+  async deletePackage(id: string) {
+    this.opLog.push(`delete:${id}`);
+    this.packages = this.packages.filter((p) => p.id !== id);
+    // Espeja el ON DELETE CASCADE de lead_package_payments.
+    this.payments = this.payments.filter((p) => p.packageId !== id);
   }
 
   async setCampaignTracked(metaCampaignId: string, tracked: boolean) {

@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Plus, Wallet, XCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Trash2, Wallet, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +25,7 @@ import type {
 import { NewPackageDialog, PaymentDialog, type BuyerOption } from "./package-dialogs";
 import { CampaignsTable } from "./campaigns-table";
 import { DateFilter } from "./date-filter";
-import type { PeriodPreset } from "@/lib/accounting/date-range";
+import type { PeriodPreset } from "@/lib/date-range";
 import { fmtDate, money, pct } from "./format";
 
 // Panel de contabilidad. Recibe TODO calculado del server component: acá no se
@@ -128,7 +128,7 @@ export function AccountingPanel({
   async function cancelPackage(pkg: PackageMetrics) {
     if (
       !window.confirm(
-        `¿Cancelar la tanda #${pkg.ordinal}? Sale de lo que hay a cobrar; los pagos registrados se conservan.`,
+        `¿Cancelar la tanda #${pkg.ordinal}? Queda anulada y sale de las cuentas — ni su precio ni sus pagos suman. Se sigue viendo acá.`,
       )
     ) {
       return;
@@ -144,6 +144,39 @@ export function AccountingPanel({
       return;
     }
     toast.success("Tanda cancelada");
+    router.refresh();
+  }
+
+  // Baja definitiva. A diferencia de cancelar, no deja rastro: es para
+  // limpiar una carga equivocada. Doble aviso porque no se puede deshacer,
+  // y el segundo detalla exactamente qué se lleva puesto.
+  async function removePackage(pkg: PackageMetrics) {
+    const pagos = paymentsByPackage.get(pkg.packageId)?.length ?? 0;
+    const detalle = [
+      pagos > 0 ? `${pagos} pago${pagos === 1 ? "" : "s"} cargado${pagos === 1 ? "" : "s"}` : null,
+      pkg.delivered > 0 ? `${pkg.delivered} lead${pkg.delivered === 1 ? "" : "s"} entregado${pkg.delivered === 1 ? "" : "s"} (se desvinculan, no se borran)` : null,
+    ].filter(Boolean);
+
+    if (
+      !window.confirm(
+        `¿Eliminar la tanda #${pkg.ordinal} de forma definitiva?` +
+          (detalle.length
+            ? `\n\nSe borra junto con: ${detalle.join(" y ")}.`
+            : "") +
+          "\n\nEsta acción no se puede deshacer.",
+      )
+    ) {
+      return;
+    }
+    const res = await fetch(`/api/admin/accounting/packages/${pkg.packageId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      toast.error(body.error ?? "No se pudo eliminar la tanda");
+      return;
+    }
+    toast.success(`Tanda #${pkg.ordinal} eliminada`);
     router.refresh();
   }
 
@@ -289,7 +322,9 @@ export function AccountingPanel({
                                       <span className="text-sm font-medium text-foreground">
                                         Tanda #{pkg.ordinal}
                                       </span>
-                                      <StatusChip status={pkg.paymentStatus} />
+                                      {pkg.status !== "cancelled" && (
+                                        <StatusChip status={pkg.paymentStatus} />
+                                      )}
                                       {pkg.status !== "open" && (
                                         <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
                                           {pkg.status === "cancelled"
@@ -319,6 +354,16 @@ export function AccountingPanel({
                                           Cancelar
                                         </Button>
                                       )}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => removePackage(pkg)}
+                                        aria-label={`Eliminar tanda #${pkg.ordinal}`}
+                                        title="Eliminar definitivamente"
+                                        className="text-muted-foreground hover:text-red-400"
+                                      >
+                                        <Trash2 className="size-3.5" />
+                                      </Button>
                                     </div>
                                   </div>
 

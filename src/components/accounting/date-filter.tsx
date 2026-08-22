@@ -9,7 +9,7 @@ import {
   PERIOD_LABELS,
   PERIOD_OPTIONS,
   type PeriodPreset,
-} from "@/lib/accounting/date-range";
+} from "@/lib/date-range";
 import type { DateRange } from "@/lib/accounting/types";
 
 // Filtro de período. Navega cambiando la URL (?periodo= o ?desde=&hasta=): el

@@ -1,14 +1,20 @@
 // ============================================================
-// PATCH /api/admin/accounting/packages/[id] — editar o cancelar una tanda.
+// PATCH  /api/admin/accounting/packages/[id] — editar o cancelar una tanda.
+// DELETE /api/admin/accounting/packages/[id] — borrarla definitivamente.
 //
 // Admin+. Precio y cantidad SOLO se editan con la tanda `open` (una tanda
 // completada o cancelada ya es historia contable: cambiarle el precio
 // reescribiría el pasado).
+//
+// Cancelar vs. borrar: cancelar deja la tanda a la vista, anulada y fuera de
+// las cuentas. Borrar la saca del sistema — es para limpiar una carga
+// equivocada, no para dar de baja una operación real.
 // ============================================================
 
 import { NextResponse } from "next/server";
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { createAccountingRepository } from "@/lib/accounting/repository";
+import { deletePackage } from "@/lib/accounting/service";
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from "@/lib/rate-limit";
 import type { PackageStatus, UpdatePackageInput } from "@/lib/accounting/types";
 
@@ -95,6 +101,39 @@ export async function PATCH(
 
     const updated = await repo.updatePackage(id, patch);
     return NextResponse.json({ package: updated });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const ctx = await requireRole("admin");
+
+    const limit = checkRateLimit(
+      `admin:pkgDelete:${ctx.userId}`,
+      RATE_LIMITS.adminAction,
+    );
+    if (!limit.success) return rateLimitResponse(limit);
+
+    const { id } = await params;
+    const repo = createAccountingRepository(ctx.supabase, ctx.accountId);
+
+    // El servicio valida que exista y respeta el orden soltar-leads → borrar
+    // (la FK de leads.package_id no cascadea).
+    try {
+      await deletePackage(repo, id);
+    } catch (err) {
+      if (err instanceof Error && err.message === "Tanda no encontrada") {
+        return NextResponse.json({ error: err.message }, { status: 404 });
+      }
+      throw err;
+    }
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return toErrorResponse(err);
   }

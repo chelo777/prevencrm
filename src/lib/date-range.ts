@@ -5,7 +5,15 @@
 // component lo resuelva y la vista sea compartible/recargable.
 // ============================================================
 
-import type { DateRange } from "./types";
+/**
+ * Intervalo de fechas inclusivo (YYYY-MM-DD). Vive acá, con el módulo que lo
+ * resuelve, y no en un dominio concreto: lo usan tanto Contabilidad como la
+ * bandeja de leads.
+ */
+export interface DateRange {
+  since: string | null;
+  until: string | null;
+}
 
 export type PeriodPreset =
   | "todo"

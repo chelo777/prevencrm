@@ -233,6 +233,29 @@ export function createAccountingRepository(
       return toPackage(data);
     },
 
+    async unlinkLeadsFromPackage(id) {
+      // `leads.package_id` no cascadea a propósito: borrar una tanda nunca
+      // puede borrar leads. Se sueltan y el lead sigue vivo, sin tanda.
+      const { data, error } = await supabase
+        .from("leads")
+        .update({ package_id: null })
+        .eq("account_id", accountId)
+        .eq("package_id", id)
+        .select("id");
+      if (error) throw error;
+      return (data ?? []).length;
+    },
+
+    async deletePackage(id) {
+      // Los pagos se van solos (FK ON DELETE CASCADE, migración 049).
+      const { error } = await supabase
+        .from("lead_packages")
+        .delete()
+        .eq("id", id)
+        .eq("account_id", accountId);
+      if (error) throw error;
+    },
+
     async createPayment(input: CreatePaymentInput) {
       const { data, error } = await supabase
         .from("lead_package_payments")

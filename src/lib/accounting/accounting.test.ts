@@ -8,7 +8,7 @@ import {
   packageMetaCost,
   paymentStatusOf,
 } from "./metrics";
-import { createPackage, loadAccountingSnapshot } from "./service";
+import { createPackage, deletePackage, loadAccountingSnapshot } from "./service";
 import { FakeAccountingRepo, makePackage } from "./accounting.test-helpers";
 import { hasMinRole } from "@/lib/auth/roles";
 import type { DeliveredLead, PackagePayment } from "./types";
@@ -126,7 +126,13 @@ describe("prorrateo de costo Meta", () => {
 });
 
 // ------------------------------------------------------------
-// Tanda cancelada
+// Tanda cancelada — una tanda cancelada NO EXISTE para la contabilidad.
+//
+// Se cancela para deshacer una carga equivocada (precio mal puesto, pago
+// cargado en la tanda que no era). Antes sus pagos seguían sumando a lo
+// cobrado mientras su precio salía de lo comprado: los dos lados de la resta
+// hablaban de universos distintos y el saldo daba negativo (una compradora
+// "a favor" que en realidad debía plata).
 // ------------------------------------------------------------
 describe("tanda cancelada", () => {
   const packages = [
@@ -142,19 +148,44 @@ describe("tanda cancelada", () => {
     expect(totals.owed).toBe(200000); // 300.000 − 100.000, la cancelada no suma
   });
 
-  it("conserva su historial de pagos en lo cobrado", () => {
+  it("sus pagos tampoco suman a lo cobrado", () => {
     const metrics = computeAllPackageMetrics(packages, payments, [], [], {});
     const totals = aggregateGlobal(metrics, []);
-    expect(totals.collected).toBe(130000); // 100.000 + 30.000 (la plata entró)
+    expect(totals.collected).toBe(100000); // solo el pago de la tanda viva
   });
 
-  it("no infla lo comprado de la compradora", () => {
+  it("no infla ni lo comprado ni lo pagado de la compradora", () => {
     const metrics = computeAllPackageMetrics(packages, payments, [], [], {});
     const [buyer] = aggregateByBuyer(metrics);
-    expect(buyer.packages).toBe(2);
+    expect(buyer.packages).toBe(2); // se sigue viendo en el detalle
     expect(buyer.openPackages).toBe(1);
     expect(buyer.totalPurchased).toBe(300000);
-    expect(buyer.totalPaid).toBe(130000);
+    expect(buyer.totalPaid).toBe(100000);
+    expect(buyer.balance).toBe(200000);
+  });
+
+  it("caso real: cancelar la tanda del pago mal cargado deja el saldo en positivo", () => {
+    // Fabiana: #1 paga 300.000; #2 cancelada con 200.000 mal cargados;
+    // #3 de 200.000 con 100.000 pagos. Antes daba saldo −100.000 ("PAGADO"
+    // en verde) cuando en realidad debe 100.000.
+    const fab = [
+      makePackage({ id: "f1", ordinal: 1, price: 300000 }),
+      makePackage({ id: "f2", ordinal: 2, price: 200000, status: "cancelled" }),
+      makePackage({ id: "f3", ordinal: 3, price: 200000 }),
+    ];
+    const pagos = [
+      pay("f1", 300000),
+      pay("f2", 100000),
+      pay("f2", 100000),
+      pay("f3", 100000),
+    ];
+    const [buyer] = aggregateByBuyer(
+      computeAllPackageMetrics(fab, pagos, [], [], {}),
+    );
+    expect(buyer.totalPurchased).toBe(500000);
+    expect(buyer.totalPaid).toBe(400000);
+    expect(buyer.balance).toBe(100000);
+    expect(buyer.paymentStatus).toBe("PARCIAL");
   });
 });
 
@@ -276,5 +307,69 @@ describe("gate de rol", () => {
   it("owner y admin sí", () => {
     expect(hasMinRole("admin", "admin")).toBe(true);
     expect(hasMinRole("owner", "admin")).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------
+// Eliminar una tanda
+//
+// Distinto de cancelar: cancelar deja la tanda a la vista como anulada;
+// eliminar la borra para limpiar una carga equivocada. Se lleva sus pagos
+// (no tendría sentido dejar pagos huérfanos) pero NUNCA los leads: un lead
+// entregado es un dato real del negocio, solo se desvincula de la tanda.
+// ------------------------------------------------------------
+describe("eliminar tanda", () => {
+  async function seed() {
+    const repo = new FakeAccountingRepo();
+    repo.packages = [
+      makePackage({ id: "pkg_1", ordinal: 1 }),
+      makePackage({ id: "pkg_2", ordinal: 2 }),
+    ];
+    repo.payments = [pay("pkg_1", 100000), pay("pkg_2", 50000)];
+    repo.delivered = [
+      { packageId: "pkg_1", campaignId: "A" },
+      { packageId: "pkg_2", campaignId: "A" },
+    ];
+    return repo;
+  }
+
+  it("borra la tanda y sus pagos, y deja intactas las demás", async () => {
+    const repo = await seed();
+    await deletePackage(repo, "pkg_1");
+
+    expect(repo.packages.map((p) => p.id)).toEqual(["pkg_2"]);
+    expect(repo.payments.map((p) => p.packageId)).toEqual(["pkg_2"]);
+  });
+
+  it("desvincula sus leads en vez de borrarlos", async () => {
+    const repo = await seed();
+    await deletePackage(repo, "pkg_1");
+
+    // El lead sigue existiendo; simplemente ya no pertenece a ninguna tanda.
+    expect(repo.unlinkedLeads).toBe(1);
+    expect(repo.delivered).toEqual([{ packageId: "pkg_2", campaignId: "A" }]);
+  });
+
+  it("desvincula ANTES de borrar (la FK de leads bloquearía el delete)", async () => {
+    const repo = await seed();
+    await deletePackage(repo, "pkg_1");
+    expect(repo.opLog).toEqual(["unlink:pkg_1", "delete:pkg_1"]);
+  });
+
+  it("la tanda borrada desaparece de las cuentas de la compradora", async () => {
+    const repo = await seed();
+    await deletePackage(repo, "pkg_1");
+
+    const snapshot = await loadAccountingSnapshot(repo);
+    const [buyer] = snapshot.buyers;
+    expect(buyer.packages).toBe(1);
+    expect(buyer.totalPurchased).toBe(300000);
+    expect(buyer.totalPaid).toBe(50000);
+  });
+
+  it("una tanda inexistente falla en vez de borrar de más", async () => {
+    const repo = await seed();
+    await expect(deletePackage(repo, "no_existe")).rejects.toThrow();
+    expect(repo.packages).toHaveLength(2);
   });
 });

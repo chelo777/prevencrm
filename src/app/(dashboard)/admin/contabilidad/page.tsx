@@ -4,7 +4,7 @@ import { hasMinRole } from "@/lib/auth/roles";
 import { createAccountingRepository } from "@/lib/accounting/repository";
 import { loadAccountingSnapshot } from "@/lib/accounting/service";
 import { AccountingPanel } from "@/components/accounting/accounting-panel";
-import { rangeFromParams, rangeLabel } from "@/lib/accounting/date-range";
+import { rangeFromParams, rangeLabel } from "@/lib/date-range";
 
 export const dynamic = "force-dynamic";
 

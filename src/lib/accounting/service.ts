@@ -72,6 +72,29 @@ export async function loadAccountingSnapshot(
   };
 }
 
+/**
+ * Baja definitiva de una tanda.
+ *
+ * Distinto de cancelar (`status = 'cancelled'`), que la deja a la vista como
+ * anulada: esto la borra para limpiar una carga equivocada. Se lleva sus
+ * pagos, pero jamás los leads — un lead entregado es un dato real del
+ * negocio, solo deja de pertenecer a una tanda.
+ *
+ * El orden importa y por eso vive acá y no en el adaptador: primero soltar
+ * los leads, después borrar. Al revés, la FK `leads.package_id` (sin
+ * cascade) rechaza el DELETE de cualquier tanda que ya haya entregado.
+ */
+export async function deletePackage(
+  repo: AccountingRepository,
+  packageId: string,
+): Promise<void> {
+  const exists = (await repo.listPackages()).some((p) => p.id === packageId);
+  if (!exists) throw new Error("Tanda no encontrada");
+
+  await repo.unlinkLeadsFromPackage(packageId);
+  await repo.deletePackage(packageId);
+}
+
 /** Alta de tanda: el ordinal ("Paula #3") lo resuelve el repositorio. */
 export async function createPackage(
   repo: AccountingRepository,

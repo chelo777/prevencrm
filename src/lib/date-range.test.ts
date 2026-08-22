@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { rangeFromParams, rangeLabel, resolvePeriod } from "./date-range";
+import { rangeFromParams, rangeLabel, resolvePeriod } from "@/lib/date-range";
 
 // Reloj fijo: martes 9 de agosto de 2026.
 const NOW = new Date("2026-08-09T15:00:00Z");

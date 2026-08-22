@@ -156,9 +156,16 @@ export function computeAllPackageMetrics(
 /**
  * Agregado por compradora.
  *
- * Las tandas CANCELADAS no suman a lo comprado ni a la deuda (no hay nada que
- * cobrar), pero SÍ conservan sus pagos en `totalPaid`: esa plata entró de
- * verdad y tiene que seguir viéndose.
+ * Una tanda CANCELADA no existe para la contabilidad: no suma a lo comprado,
+ * ni a lo pagado, ni a la deuda. Se cancela para deshacer una carga
+ * equivocada (precio mal puesto, pago cargado en la tanda que no era), así
+ * que su plata tampoco es real.
+ *
+ * Antes sus pagos SÍ sumaban a `totalPaid` mientras su precio salía de
+ * `totalPurchased`: los dos lados de la resta hablaban de universos distintos
+ * y el saldo daba negativo — una compradora aparecía "PAGADO" con saldo a
+ * favor cuando en realidad debía plata. La tanda cancelada se sigue viendo en
+ * el detalle (y en `packages`), simplemente no participa de las cuentas.
  */
 export function aggregateByBuyer(metrics: PackageMetrics[]): BuyerTotals[] {
   const byBuyer = new Map<string, PackageMetrics[]>();
@@ -174,8 +181,9 @@ export function aggregateByBuyer(metrics: PackageMetrics[]): BuyerTotals[] {
     const totalPurchased = round2(
       active.reduce((s, m) => s + m.price, 0),
     );
-    // Los pagos de tandas canceladas cuentan: el dinero entró.
-    const totalPaid = round2(list.reduce((s, m) => s + m.paid, 0));
+    // Mismo universo que `totalPurchased`: si la tanda no cuenta, su pago
+    // tampoco. Es lo que hace que la resta cierre.
+    const totalPaid = round2(active.reduce((s, m) => s + m.paid, 0));
     out.push({
       buyerUserId,
       packages: list.length,
@@ -209,7 +217,9 @@ export function aggregateGlobal(
 ): GlobalTotals {
   const active = metrics.filter((m) => m.status !== "cancelled");
   const toCollect = round2(active.reduce((s, m) => s + m.price, 0));
-  const collected = round2(metrics.reduce((s, m) => s + m.paid, 0));
+  // Solo lo cobrado por tandas vivas: una tanda cancelada no aporta plata
+  // (mismo criterio que `toCollect`, para que la resta cierre).
+  const collected = round2(active.reduce((s, m) => s + m.paid, 0));
   const owed = round2(
     active.reduce((s, m) => s + Math.max(0, m.balance), 0),
   );

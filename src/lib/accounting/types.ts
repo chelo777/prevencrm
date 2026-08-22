@@ -15,10 +15,7 @@ export type PackageStatus = "open" | "completed" | "cancelled";
  * de pago). Mezclar períodos entre numerador y denominador daría métricas
  * falsas, así que o filtra todo o no filtra nada.
  */
-export interface DateRange {
-  since: string | null;
-  until: string | null;
-}
+export type { DateRange } from "@/lib/date-range";
 
 /** Estado de pago DERIVADO (no se persiste): sale de price vs. pagado. */
 export type PaymentStatus = "PAGADO" | "PARCIAL" | "DEBE";
@@ -176,6 +173,17 @@ export interface AccountingRepository {
   nextOrdinal(buyerUserId: string): Promise<number>;
   createPackage(input: CreatePackageInput & { ordinal: number }): Promise<LeadPackage>;
   updatePackage(id: string, input: UpdatePackageInput): Promise<LeadPackage>;
+  /**
+   * Borra la tanda. Sus pagos se van con ella (FK ON DELETE CASCADE); los
+   * leads NO — hay que desvincularlos antes con `unlinkLeadsFromPackage`.
+   */
+  deletePackage(id: string): Promise<void>;
+  /**
+   * Suelta los leads de esa tanda (`package_id = NULL`) y devuelve cuántos
+   * soltó. Obligatorio antes de borrar: la FK `leads.package_id` no cascadea,
+   * así que el DELETE fallaría con una tanda que ya entregó leads.
+   */
+  unlinkLeadsFromPackage(id: string): Promise<number>;
   createPayment(input: CreatePaymentInput): Promise<PackagePayment>;
   /** Prende/apaga si una campaña se mide (gasto Meta + prorrateo). */
   setCampaignTracked(metaCampaignId: string, tracked: boolean): Promise<void>;
