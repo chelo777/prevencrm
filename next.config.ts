@@ -60,6 +60,29 @@ const SECURITY_HEADERS = [
   },
 ] as const;
 
+/**
+ * Rutas que se renderizan igual para cualquiera (con o sin sesión) y por lo
+ * tanto pueden vivir en una caché compartida. TODO lo que no esté acá se
+ * trata como página autenticada: `private, no-store`.
+ *
+ * Es una alternancia de regex, se usa dentro de `source` en headers(). Al
+ * agregar una página pública nueva, sumala acá; si te olvidás, la página
+ * simplemente no se cachea en el borde (fail-safe: se pierde latencia, nunca
+ * corrección).
+ */
+const PUBLIC_ROUTES = [
+  "login",
+  "signup",
+  "forgot-password",
+  "gracias",
+  "r/.*", // links cortos públicos
+  "join/.*", // alta de asesor por invitación
+  "manifest.webmanifest",
+  "robots.txt",
+  "sitemap.xml",
+  "favicon.ico",
+].join("|");
+
 const nextConfig: NextConfig = {
   /**
    * Standalone output for Docker/Dokploy.
@@ -88,19 +111,39 @@ const nextConfig: NextConfig = {
    *     the correct production headers for hashed assets.
    *   - /api/*          — no-store. API responses are per-user and
    *     must never be shared across requests at the edge.
-   *   - Everything else — public, brief s-maxage + generous
+   *   - PUBLIC_ROUTES   — public, brief s-maxage + generous
    *     stale-while-revalidate. The edge serves instantly from cache
    *     for the first 5 min, then returns cached content while
    *     refreshing in the background for up to 24 h. A deploy's
    *     chunk-hash drift self-heals within ~5 min with no user-
    *     visible latency.
+   *   - Everything else — `private, no-store`. Authenticated pages are
+   *     per-user AND change on every write.
    *
-   *   Note: dynamic dashboard routes (/inbox, /contacts, /pipelines,
-   *   /broadcasts, etc.) are server-rendered per request — Next.js
-   *   and Supabase auth already prevent them from being served
-   *   from a shared cache. The s-maxage here is a ceiling; Next.js
-   *   and auth middleware still set `private` / `no-store` for
-   *   per-user responses.
+   *   The note that used to sit here claimed dashboard routes were
+   *   "already protected" by Next.js + Supabase auth. They were not:
+   *   this rule OVERRODE whatever Next set, and production served
+   *   `Cache-Control: public, max-age=0, s-maxage=300,
+   *   stale-while-revalidate=86400` on every authenticated page. Two
+   *   real consequences:
+   *
+   *     1. `router.refresh()` came back STALE. The RSC payload is a GET
+   *        to the same URL, so `stale-while-revalidate` let the browser
+   *        answer it instantly from cache and revalidate in the
+   *        background — you saved a change, the panel kept showing the
+   *        old numbers, and only a manual reload fixed it. This is what
+   *        made the accounting panel (and any optimistic write) look
+   *        broken.
+   *     2. `public` without `Vary: Cookie` invites any shared cache to
+   *        store one user's authenticated HTML and serve it to another.
+   *        Nothing in front of the app happened to cache it, which is
+   *        the only reason this never leaked.
+   *
+   *   Hence: private by DEFAULT, and only the routes listed below —
+   *   which render the same for everyone, logged in or not — opt into
+   *   edge caching. A new authenticated route is safe automatically;
+   *   forgetting to add one here costs a little latency, never
+   *   correctness.
    *
    * Security headers are appended via a separate catch-all rule
    * below — Next.js merges headers from every matching rule, so
@@ -114,13 +157,26 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Cache-Control", value: "no-store" }],
       },
       {
-        source: "/:path((?!_next/static|_next/image|api).*)",
+        // Páginas públicas: idénticas para todo el mundo, se pueden cachear
+        // en el borde. Es la regla que cura la deriva de chunk-hashes tras
+        // un deploy.
+        source: `/:path(${PUBLIC_ROUTES})`,
         headers: [
           {
             key: "Cache-Control",
             value:
               "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
           },
+        ],
+      },
+      {
+        // Todo lo demás es la app autenticada: por usuario y cambiante en
+        // cada escritura. `no-store` es lo que hace que router.refresh()
+        // traiga datos frescos en vez de la copia stale del navegador.
+        source: `/:path((?!_next/static|_next/image|api|${PUBLIC_ROUTES}).*)`,
+        headers: [
+          { key: "Cache-Control", value: "private, no-store" },
+          { key: "Vary", value: "Cookie" },
         ],
       },
       {
