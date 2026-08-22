@@ -218,6 +218,102 @@ automática por deal.
 | `/api/leads/sources/preview` | POST | admin | Preview del wizard (pestañas + sugerencias) |
 | `/api/leads/contacted` | POST | agent | Traza click-to-chat |
 | `/api/leads/import-historico` | POST | admin | Import histórico |
+| `/api/leads/stage` | POST | agent | Cambio de etapa (durable, con traza) |
+| `/api/admin/accounting/packages/[id]` | DELETE | admin | Eliminar tanda (borra pagos, desvincula leads) |
+| `/api/leads/bulk` | POST | agent | Etapa o etiquetas en masa (por ids o por filtro) |
+| `/api/leads/tags` | POST | agent | Asignar/quitar etiqueta (durable, idempotente, con traza) |
+
+---
+
+## Escrituras durables desde el celular (`src/lib/durable-write.ts`)
+
+**Regla: toda escritura que un asesor hace desde el celular va por endpoint +
+outbox, nunca por update directo con supabase-js desde el navegador.**
+
+El asesor cambia algo y acto seguido toca WhatsApp: `wa.me` abre la app, la
+pestaña pasa a segundo plano y el SO la suspende. Un fetch normal se aborta
+antes de llegar a la base y el cambio se pierde **en silencio**. Este bug
+apareció tres veces (etapas en lista, en Kanban/detalle, y etiquetas).
+
+Las tres piezas, y las tres hacen falta:
+
+| Pieza | Qué cubre |
+|-------|-----------|
+| Endpoint que confirma filas afectadas | Distinguir "guardado" de "rechazado por RLS" (0 filas era invisible) |
+| `fetch(..., { keepalive: true })` | Que la pestaña se descargue a mitad del request |
+| Outbox en localStorage (`durable-write.ts`) | Quedarse sin señal: reintenta al volver la conexión o al volver a la app |
+
+`durablePost()` (`src/lib/durable-write-client.ts`) devuelve **tres** estados y
+quien llama los necesita distintos: `ok` (está en la base), `queued` (no llegó,
+se reintenta solo → **dejar** el cambio optimista en pantalla), y rechazado
+(→ **revertir**). Un 4xx que no sea 408/429 no se reintenta: sin permiso no
+mejora insistiendo. Los pedidos se colapsan por `id` (`stage:<dealId>`,
+`tag:<contactId>:<tagId>`) para que la cola no reaplique una etapa vieja encima
+de la nueva. Los endpoints deben ser **idempotentes** porque la cola reenvía.
+
+Todo cambio queda en `activity_log` (`stage_change`, `tag_added`,
+`tag_removed`): sin esa traza, estos bugs sólo se detectan por reporte verbal.
+
+---
+
+## Cache-Control: privado por defecto (`next.config.ts`)
+
+**Toda página que no esté en `PUBLIC_ROUTES` sale con `private, no-store`.**
+
+Antes la regla catch-all mandaba `public, max-age=0, s-maxage=300,
+stale-while-revalidate=86400` a *todo* lo que no fuera `/api` ni `/_next`, y
+eso pisaba lo que Next.js ponía en las rutas autenticadas. Dos efectos reales:
+
+1. **`router.refresh()` devolvía datos viejos.** El payload RSC es un GET a la
+   misma URL, así que `stale-while-revalidate` dejaba al navegador contestarlo
+   al instante desde su caché y revalidar por detrás. Guardabas un cambio, el
+   panel seguía mostrando lo anterior, y sólo recargando a mano aparecía. Se
+   notó primero en Contabilidad, pero afectaba a cualquier pantalla que
+   dependiera de `router.refresh()`.
+2. **`public` sin `Vary: Cookie`** habilitaba a cualquier caché compartida a
+   guardar el HTML autenticado de un usuario y servírselo a otro. Nada delante
+   de la app lo cacheaba, que es la única razón por la que no se filtró.
+
+Al agregar una página **pública** nueva, sumala a `PUBLIC_ROUTES`. Olvidarse
+sólo cuesta latencia (no se cachea en el borde), nunca corrección — el default
+es el seguro. Verificar con `curl -I` sobre el build de producción (`npm run
+build && npm start`): en `npm run dev` Next impone sus propios headers y no se
+ve el efecto.
+
+---
+
+## Bandeja de leads: un solo filtro, dos consumidores
+
+`src/lib/leads/lead-filter.ts` define el filtro de `/leads` (etapa, etiqueta,
+asesor, duplicados, fecha de ingreso) y lo usan **la página** (para listar) y
+**`/api/leads/bulk`** (para saber sobre qué filas opera "seleccionar todos").
+Si cada uno interpretara los query params por su cuenta, "seleccioné 1057" y
+"se modificaron 1057" podrían no ser el mismo conjunto.
+
+`scopeFilterToRole()` es la **segunda puerta** del control de acceso: a un
+`agent` le fuerza `assignedTo = su user_id` y le saca "solo duplicados", sin
+importar qué diga la URL o el body. La RLS (037) sigue siendo el muro real,
+pero el servidor no ejecuta la consulta que le pidan — un asesor que manipule
+el request termina operando sobre lo suyo, explícitamente y con test propio.
+La función es idempotente: reaplicarla nunca ensancha el alcance.
+
+Al agregar un filtro nuevo hay que tocar **un** archivo: `parseLeadFilter`
+(leerlo), `applyLeadFilter` (traducirlo a la query) y, si es sensible,
+`scopeFilterToRole` (acotarlo). La UI lo manda solo; el bulk lo hereda.
+
+Acciones masivas: `/api/leads/bulk` es idempotente (upsert con
+`ignoreDuplicates` para etiquetas), tiene tope de `MAX_IDS` por request y
+responde `affected` — **cuántas filas cambiaron de verdad**, no cuántas se
+pidieron. La UI muestra ese número, así que si la RLS dejó leads afuera se ve.
+
+### Mobile
+
+Debajo de `sm` la bandeja NO usa tabla: es una lista de tarjetas a ancho
+completo (`-mx-4`, sin contenedor con borde). La tabla comprimida a 390px
+dentro de un `overflow-x-auto` obligaba a deslizar para llegar a las acciones.
+Los filtros van detrás de un botón "Filtros" con contador; apilados empujaban
+la lista fuera de la pantalla. Áreas táctiles de 44px (`min-h-11`) en todo
+control que se toque con el pulgar.
 
 ---
 

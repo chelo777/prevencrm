@@ -9,6 +9,15 @@ import { LeadDetailProvider } from "./lead-detail-provider";
 import { LeadNameCell } from "./lead-name-cell";
 import { AssigneeSelect, type Asesora } from "./assignee-select";
 import { DeleteLeadButton } from "./delete-lead-button";
+import { LeadSelectionProvider } from "./lead-selection";
+import { LeadCheckbox, LeadCheckboxAll } from "./lead-checkbox";
+import { BulkActionsBar, SelectAllMatchingHint } from "./bulk-actions-bar";
+import {
+  applyLeadFilter,
+  hasActiveFilters,
+  parseLeadFilter,
+  scopeFilterToRole,
+} from "@/lib/leads/lead-filter";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +26,17 @@ export const dynamic = "force-dynamic";
 // de etapa (update optimista como el Kanban) y los filtros por
 // etapa/etiqueta en la URL (paginado de a 50).
 //
-// Responsive: en el teléfono la tabla se reduce a lo accionable —
-// contacto (con etiquetas debajo), etapa editable y WhatsApp solo
-// ícono. Campaña, fecha y la columna de etiquetas aparecen recién en
-// pantallas anchas; nunca hay scroll horizontal.
+// Responsive: en el teléfono NO hay tabla. Una tabla con scroll horizontal
+// dentro de un contenedor con borde dejaba las acciones fuera de la pantalla
+// (había que deslizar para llegar al botón de WhatsApp). Debajo de `sm` la
+// lista se renderiza como tarjetas a ancho completo, sin contenedor propio y
+// sin scroll lateral; la tabla vuelve recién en pantallas anchas, que es
+// donde las columnas entran de verdad.
+//
+// Selección múltiple: los checkboxes y la barra de acciones masivas son
+// cliente (`lead-selection.tsx`), pero el filtro que define "todos los que
+// coinciden" es el MISMO módulo que usa /api/leads/bulk — así lo que se
+// cuenta y lo que se modifica no pueden separarse.
 
 const PER_PAGE = 50;
 
@@ -52,11 +68,15 @@ interface LeadRow {
 
 function fmtDate(iso: string): string {
   try {
+    // hour12:false a propósito: "12:28 p. m." es más ancho que "12:28" y esta
+    // columna compite por el ancho de la tabla con la de acciones.
     return new Date(iso).toLocaleString("es-AR", {
       day: "2-digit",
       month: "2-digit",
+      year: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
     });
   } catch {
     return iso;
@@ -84,7 +104,7 @@ interface PageProps {
 }
 
 export default async function LeadsPage({ searchParams }: PageProps) {
-  const { supabase, accountId, role } = await getCurrentAccount();
+  const { supabase, accountId, role, userId } = await getCurrentAccount();
   const params = await searchParams;
 
   // Administrar fuentes es solo admin+. Para una asesora (agent) ocultamos
@@ -93,19 +113,16 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   const isAdmin = hasMinRole(role, "admin");
   const canManageSources = isAdmin;
 
-  const stageFilter =
-    typeof params.etapa === "string" && params.etapa ? params.etapa : null;
-  const tagFilter =
-    typeof params.etiqueta === "string" && params.etiqueta
-      ? params.etiqueta
-      : null;
-  // Filtro por asesora (solo admin). "none" = leads sin asignar.
-  const asesoraFilter =
-    isAdmin && typeof params.asesora === "string" && params.asesora
-      ? params.asesora
-      : null;
-  // Filtro "Solo duplicados" (solo admin): ver dupContactIds más abajo.
-  const dupFilter = isAdmin && params.dup === "1";
+  // Un solo módulo define el filtro (`lib/leads/lead-filter.ts`) y lo acota
+  // al rol: a un agent le fuerza sus propios leads y le saca "solo
+  // duplicados", pida lo que pida la URL. /api/leads/bulk hace exactamente lo
+  // mismo con el mismo código, así que "seleccionar todos los que coinciden"
+  // opera sobre el conjunto que se está viendo, ni uno más.
+  const filter = scopeFilterToRole(parseLeadFilter(params), role, userId);
+  const stageFilter = filter.stageId;
+  const tagFilter = filter.tagId;
+  const asesoraFilter = filter.assignedTo;
+  const dupFilter = filter.onlyDuplicates;
   const pageNum = Math.max(
     1,
     Number(typeof params.pagina === "string" ? params.pagina : "1") || 1,
@@ -152,7 +169,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
         .from("pipelines")
         .select("id, stages:pipeline_stages(id, name, color, position)")
         .eq("account_id", accountId),
-      supabase.from("tags").select("id, name").order("name"),
+      supabase.from("tags").select("id, name, color").order("name"),
       asesorasP ??
         Promise.resolve({
           data: [] as { user_id: string; full_name: string | null }[],
@@ -173,9 +190,8 @@ export default async function LeadsPage({ searchParams }: PageProps) {
     .flatMap((p) => p.stages ?? [])
     .sort((a, b) => a.position - b.position)
     .map((s) => ({ id: s.id, name: s.name, color: s.color }));
-  const tagOptions = ((tagsRes.data ?? []) as { id: string; name: string }[]).map(
-    (t) => ({ id: t.id, name: t.name }),
-  );
+  const tagChips = (tagsRes.data ?? []) as TagChip[];
+  const tagOptions = tagChips.map((t) => ({ id: t.id, name: t.name }));
 
   const asesoras: Asesora[] = (
     (asesorasRes.data ?? []) as { user_id: string; full_name: string | null }[]
@@ -230,20 +246,7 @@ export default async function LeadsPage({ searchParams }: PageProps) {
       { count: "exact" },
     )
     .eq("account_id", accountId);
-  if (stageFilter) query = query.eq("deal.stage_id", stageFilter);
-  if (tagFilter) query = query.eq("contact.tag_filter.tag_id", tagFilter);
-  if (asesoraFilter === "none")
-    query = query.is("deal.assigned_agent_id", null);
-  else if (asesoraFilter)
-    query = query.eq("deal.assigned_agent_id", asesoraFilter);
-  if (dupFilter) {
-    // Set vacío = ningún duplicado; forzamos un contact_id imposible para
-    // que la query no devuelva nada en vez de traer todo.
-    query = query.in(
-      "contact_id",
-      dupContactIds.size > 0 ? [...dupContactIds] : ["00000000-0000-0000-0000-000000000000"],
-    );
-  }
+  query = applyLeadFilter(query, filter, dupContactIds);
 
   const { data: leads, count } = await query
     .order("created_at", { ascending: false })
@@ -252,9 +255,33 @@ export default async function LeadsPage({ searchParams }: PageProps) {
   const rows = (leads ?? []) as unknown as LeadRow[];
   const total = count ?? rows.length;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const hasFilters = Boolean(
-    stageFilter || tagFilter || asesoraFilter || dupFilter,
+  const hasFilters = hasActiveFilters(filter);
+  // Ids de la página: el checkbox de cabecera marca estos, no los 1057.
+  const pageIds = rows.map((r) => r.id);
+  // Las etiquetas se resuelven una sola vez: las consumen la vista de
+  // tarjetas y la tabla, que son dos marcados sobre los mismos datos.
+  // Mensaje de lista vacía: lo comparten tarjetas y tabla. Distingue "no hay
+  // nada" de "los filtros no dejaron pasar nada", que son problemas distintos.
+  const emptyMessage = hasFilters ? (
+    <>Ningún lead coincide con los filtros.</>
+  ) : canManageSources ? (
+    <>
+      Todavía no hay leads. Dá de alta una{" "}
+      <Link href="/leads/sources" className="text-primary underline">
+        fuente
+      </Link>{" "}
+      y esperá el próximo ciclo de sincronización.
+    </>
+  ) : (
+    <>Todavía no tenés leads asignados.</>
   );
+
+  const viewRows = rows.map((lead) => ({
+    lead,
+    leadTags: (lead.contact?.contact_tags ?? [])
+      .map((ct) => ct.tags)
+      .filter((t): t is TagChip => Boolean(t)),
+  }));
 
   function pageHref(n: number): string {
     const sp = new URLSearchParams();
@@ -281,7 +308,12 @@ export default async function LeadsPage({ searchParams }: PageProps) {
 
   return (
     <LeadDetailProvider initialContactId={deepLinkContactId}>
-      <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <LeadSelectionProvider totalMatching={total} pageSize={rows.length}>
+      {/* La barra de acciones es fija abajo (h-14): la lista reserva ese alto
+          para que el último lead no quede tapado.
+          En xl la bandeja se ensancha a 7xl: es la única pantalla con ocho
+          columnas y a 6xl la de acciones quedaba fuera del borde. */}
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 pb-20 xl:max-w-7xl sm:pb-16">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Leads</h1>
@@ -342,16 +374,99 @@ export default async function LeadsPage({ searchParams }: PageProps) {
         </Link>
       ) : null}
 
-      <div className="overflow-x-auto rounded-lg border border-border bg-card">
+      {/* Lista: tarjetas en el teléfono, tabla en pantalla ancha. Son dos
+          marcados distintos a propósito — una tabla comprimida a 390px
+          obligaba a deslizar para llegar a las acciones. */}
+
+      {/* ── Mobile ── */}
+      <ul className="-mx-4 divide-y divide-border sm:hidden">
+        {viewRows.length === 0 ? (
+          <li className="px-4 py-10 text-center text-sm text-muted-foreground">
+            {emptyMessage}
+          </li>
+        ) : (
+          viewRows.map(({ lead, leadTags }) => (
+            <li key={lead.id} className="flex gap-3 px-4 py-3">
+              <div className="pt-1">
+                <LeadCheckbox
+                  id={lead.id}
+                  label={lead.contact?.name || "este lead"}
+                />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <LeadNameCell
+                  contactId={lead.contact?.id ?? null}
+                  name={lead.contact?.name || "Sin nombre"}
+                  phone={lead.contact?.phone ?? null}
+                  phoneValid={lead.phone_valid}
+                  duplicate={
+                    isAdmin &&
+                    Boolean(
+                      lead.contact?.id && dupContactIds.has(lead.contact.id),
+                    )
+                  }
+                />
+
+                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+                  Ingresó {fmtDate(lead.created_at)}
+                </p>
+
+                {leadTags.length > 0 && (
+                  <div className="mt-1.5">
+                    <TagList tags={leadTags} />
+                  </div>
+                )}
+
+                <div className="mt-2.5 flex items-center justify-between gap-2">
+                  {lead.deal ? (
+                    <StageSelect
+                      dealId={lead.deal.id}
+                      stages={stages}
+                      initialStageId={lead.deal.stage_id}
+                    />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      Sin etapa
+                    </span>
+                  )}
+                  <span className="flex shrink-0 items-center gap-1">
+                    <WhatsAppButton
+                      leadId={lead.id}
+                      phone={lead.contact?.phone ?? null}
+                      name={lead.contact?.name ?? null}
+                      campaign={lead.campaign_name ?? lead.form_name}
+                      disabled={!lead.phone_valid}
+                    />
+                    {isAdmin && (
+                      <DeleteLeadButton
+                        leadId={lead.id}
+                        leadName={lead.contact?.name ?? ""}
+                      />
+                    )}
+                  </span>
+                </div>
+              </div>
+            </li>
+          ))
+        )}
+      </ul>
+
+      {/* ── Desktop ── */}
+      <div className="hidden overflow-x-auto rounded-lg border border-border bg-card sm:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
+              <th className="w-10 px-4 py-3">
+                <LeadCheckboxAll pageIds={pageIds} />
+                <span className="sr-only">Seleccionar</span>
+              </th>
               <th className="px-3 py-3 font-medium sm:px-4">Contacto</th>
               <th className="px-3 py-3 font-medium sm:px-4">Etapa</th>
               <th className="hidden px-4 py-3 font-medium md:table-cell">
                 Etiquetas
               </th>
-              <th className="hidden px-4 py-3 font-medium lg:table-cell">
+              <th className="hidden px-4 py-3 font-medium xl:table-cell">
                 Campaña
               </th>
               {isAdmin && (
@@ -359,118 +474,105 @@ export default async function LeadsPage({ searchParams }: PageProps) {
                   Asignado a
                 </th>
               )}
-              <th className="hidden px-4 py-3 font-medium md:table-cell">
-                Ingresó
-              </th>
+              <th className="px-4 py-3 font-medium">Ingresó</th>
               <th className="px-3 py-3 font-medium sm:px-4">
                 <span className="sr-only sm:not-sr-only">Acción</span>
               </th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {viewRows.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 7 : 6} className="px-4 py-10 text-center text-muted-foreground">
-                  {hasFilters ? (
-                    <>Ningún lead coincide con los filtros.</>
-                  ) : canManageSources ? (
-                    <>
-                      Todavía no hay leads. Dá de alta una{" "}
-                      <Link href="/leads/sources" className="text-primary underline">
-                        fuente
-                      </Link>{" "}
-                      y esperá el próximo ciclo de sincronización.
-                    </>
-                  ) : (
-                    <>Todavía no tenés leads asignados.</>
-                  )}
+                <td
+                  colSpan={isAdmin ? 8 : 7}
+                  className="px-4 py-10 text-center text-muted-foreground"
+                >
+                  {emptyMessage}
                 </td>
               </tr>
             ) : (
-              rows.map((lead) => {
-                const leadTags = (lead.contact?.contact_tags ?? [])
-                  .map((ct) => ct.tags)
-                  .filter((t): t is TagChip => Boolean(t));
-                return (
-                  <tr key={lead.id} className="border-b border-border/60 last:border-0">
-                    <td className="px-3 py-3 sm:px-4">
-                      <LeadNameCell
-                        contactId={lead.contact?.id ?? null}
-                        name={lead.contact?.name || "Sin nombre"}
-                        phone={lead.contact?.phone ?? null}
-                        phoneValid={lead.phone_valid}
-                        duplicate={
-                          isAdmin &&
-                          Boolean(
-                            lead.contact?.id &&
-                              dupContactIds.has(lead.contact.id),
-                          )
-                        }
+              viewRows.map(({ lead, leadTags }) => (
+                <tr
+                  key={lead.id}
+                  className="border-b border-border/60 last:border-0"
+                >
+                  <td className="px-4 py-3">
+                    <LeadCheckbox
+                      id={lead.id}
+                      label={lead.contact?.name || "este lead"}
+                    />
+                  </td>
+                  <td className="px-3 py-3 sm:px-4">
+                    <LeadNameCell
+                      contactId={lead.contact?.id ?? null}
+                      name={lead.contact?.name || "Sin nombre"}
+                      phone={lead.contact?.phone ?? null}
+                      phoneValid={lead.phone_valid}
+                      duplicate={
+                        isAdmin &&
+                        Boolean(
+                          lead.contact?.id && dupContactIds.has(lead.contact.id),
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-3 sm:px-4">
+                    {lead.deal ? (
+                      <StageSelect
+                        dealId={lead.deal.id}
+                        stages={stages}
+                        initialStageId={lead.deal.stage_id}
                       />
-                      {leadTags.length > 0 && (
-                        <div className="mt-1 md:hidden">
-                          <TagList tags={leadTags} />
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 sm:px-4">
-                      {lead.deal ? (
-                        <StageSelect
-                          dealId={lead.deal.id}
-                          stages={stages}
-                          initialStageId={lead.deal.stage_id}
-                        />
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="hidden px-4 py-3 md:table-cell">
-                      {leadTags.length === 0 ? (
-                        <span className="text-muted-foreground">—</span>
-                      ) : (
-                        <TagList tags={leadTags} />
-                      )}
-                    </td>
-                    <td className="hidden px-4 py-3 text-muted-foreground lg:table-cell">
-                      {lead.campaign_name || lead.form_name || "—"}
-                    </td>
-                    {isAdmin && (
-                      <td className="hidden px-4 py-3 sm:table-cell">
-                        {lead.deal ? (
-                          <AssigneeSelect
-                            dealId={lead.deal.id}
-                            accountId={accountId}
-                            initialAgentId={lead.deal.assigned_agent_id}
-                            asesoras={asesoras}
-                          />
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
                     )}
-                    <td className="hidden px-4 py-3 text-muted-foreground md:table-cell">
-                      {fmtDate(lead.created_at)}
-                    </td>
-                    <td className="px-3 py-3 text-right sm:px-4 sm:text-left">
-                      <div className="flex items-center justify-end gap-1.5 sm:justify-start">
-                        <WhatsAppButton
-                          leadId={lead.id}
-                          phone={lead.contact?.phone ?? null}
-                          name={lead.contact?.name ?? null}
-                          campaign={lead.campaign_name ?? lead.form_name}
-                          disabled={!lead.phone_valid}
+                  </td>
+                  <td className="hidden max-w-[11rem] px-4 py-3 md:table-cell">
+                    {leadTags.length === 0 ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <TagList tags={leadTags} />
+                    )}
+                  </td>
+                  <td className="hidden max-w-[12rem] truncate px-4 py-3 text-muted-foreground xl:table-cell">
+                    {lead.campaign_name || lead.form_name || "—"}
+                  </td>
+                  {isAdmin && (
+                    <td className="hidden px-4 py-3 sm:table-cell">
+                      {lead.deal ? (
+                        <AssigneeSelect
+                          dealId={lead.deal.id}
+                          accountId={accountId}
+                          initialAgentId={lead.deal.assigned_agent_id}
+                          asesoras={asesoras}
                         />
-                        {isAdmin && (
-                          <DeleteLeadButton
-                            leadId={lead.id}
-                            leadName={lead.contact?.name ?? ""}
-                          />
-                        )}
-                      </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </td>
-                  </tr>
-                );
-              })
+                  )}
+                  <td className="whitespace-nowrap px-4 py-3 tabular-nums text-muted-foreground">
+                    {fmtDate(lead.created_at)}
+                  </td>
+                  <td className="w-px whitespace-nowrap px-3 py-3 text-right sm:px-4 sm:text-left">
+                    <div className="flex items-center justify-end gap-1.5 sm:justify-start">
+                      <WhatsAppButton
+                        leadId={lead.id}
+                        phone={lead.contact?.phone ?? null}
+                        name={lead.contact?.name ?? null}
+                        campaign={lead.campaign_name ?? lead.form_name}
+                        disabled={!lead.phone_valid}
+                      />
+                      {isAdmin && (
+                        <DeleteLeadButton
+                          leadId={lead.id}
+                          leadName={lead.contact?.name ?? ""}
+                        />
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
           </tbody>
         </table>
@@ -502,7 +604,10 @@ export default async function LeadsPage({ searchParams }: PageProps) {
           </div>
         </div>
       )}
+      <SelectAllMatchingHint />
       </div>
+      <BulkActionsBar stages={stages} tags={tagChips} />
+      </LeadSelectionProvider>
     </LeadDetailProvider>
   );
 }
