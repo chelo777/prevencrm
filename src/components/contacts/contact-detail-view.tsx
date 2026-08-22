@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { useAndroidBackClose } from '@/hooks/use-android-back';
+import { durablePost } from '@/lib/durable-write-client';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag, ContactNote, CustomField, ContactCustomValue, Deal, MessageTemplate } from '@/types';
 import {
@@ -310,27 +311,23 @@ export function ContactDetailView({
 
     const prev = headerStageId;
     setHeaderStageId(nextStageId); // optimista
-    // Persistimos vía endpoint con keepalive (durable ante navegación a
-    // WhatsApp / suspensión de la pestaña en mobile). El endpoint además
-    // registra el stage_change (por eso ya no logueamos acá).
-    try {
-      const res = await fetch('/api/leads/stage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dealId: primary.id, stageId: nextStageId, source: 'detail' }),
-        keepalive: true,
-      });
-      if (!res.ok) {
-        setHeaderStageId(prev);
-        toast.error('No se pudo cambiar la etapa');
-      } else {
-        setCapitasWarning(false);
-        fetchDeals(); // mantiene la tab Deals en sync
-        onUpdated();
-      }
-    } catch {
+    // Persistimos vía endpoint con keepalive + cola de reintento: durable ante
+    // navegación a WhatsApp, suspensión de la pestaña y pérdida de señal. El
+    // endpoint además registra el stage_change (por eso ya no logueamos acá).
+    const { ok, queued } = await durablePost({
+      id: `stage:${primary.id}`,
+      url: '/api/leads/stage',
+      body: { dealId: primary.id, stageId: nextStageId, source: 'detail' },
+    });
+
+    if (ok) {
+      setCapitasWarning(false);
+      fetchDeals(); // mantiene la tab Deals en sync
+      onUpdated();
+    } else if (!queued) {
+      // Rechazo permanente. Si quedó encolado dejamos la etapa optimista:
+      // la cola la va a aplicar al volver la señal.
       setHeaderStageId(prev);
-      toast.error('No se pudo cambiar la etapa');
     }
   }
 
@@ -433,31 +430,41 @@ export function ContactDetailView({
     setSavingDetails(false);
   }
 
+  // Asignar/quitar etiqueta. Va por endpoint con escritura durable, NO por
+  // update directo del cliente: en el celular el asesor etiqueta y enseguida
+  // toca WhatsApp; un request normal se aborta al pasar la pestaña a segundo
+  // plano y la etiqueta se perdía en silencio (el error se tragaba sin avisar).
+  // Ahora: optimista + keepalive + cola de reintento + aviso en cada falla.
   async function toggleTag(tagId: string) {
     if (!contactId) return;
-    setSavingTags(true);
 
     const isSelected = contactTagIds.includes(tagId);
+    setSavingTags(true);
 
-    if (isSelected) {
-      const { error } = await supabase
-        .from('contact_tags')
-        .delete()
-        .eq('contact_id', contactId)
-        .eq('tag_id', tagId);
-      if (!error) {
-        setContactTagIds((prev) => prev.filter((id) => id !== tagId));
-        onUpdated();
-      }
-    } else {
-      const { error } = await supabase
-        .from('contact_tags')
-        .insert({ contact_id: contactId, tag_id: tagId });
-      if (!error) {
-        setContactTagIds((prev) => [...prev, tagId]);
-        onUpdated();
-      }
+    // Optimista: el chip responde al toque aunque el celular esté sin señal.
+    setContactTagIds((prev) =>
+      isSelected ? prev.filter((id) => id !== tagId) : [...prev, tagId],
+    );
+
+    const { ok, queued } = await durablePost({
+      id: `tag:${contactId}:${tagId}`,
+      url: '/api/leads/tags',
+      body: {
+        contactId,
+        tagId,
+        action: isSelected ? 'remove' : 'add',
+        dealId: deals[0]?.id ?? null,
+      },
+    });
+
+    // Rechazo permanente (lead ajeno): revertimos. Si quedó encolado dejamos
+    // el chip como está — la cola lo va a aplicar sola.
+    if (!ok && !queued) {
+      setContactTagIds((prev) =>
+        isSelected ? [...prev, tagId] : prev.filter((id) => id !== tagId),
+      );
     }
+    if (ok) onUpdated();
     setSavingTags(false);
   }
 
@@ -506,15 +513,11 @@ export function ContactDetailView({
     setAllTags((prev) =>
       [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)),
     );
-    const { error: assignErr } = await supabase
-      .from('contact_tags')
-      .insert({ contact_id: contactId, tag_id: tag.id });
-    if (!assignErr) {
-      setContactTagIds((prev) => [...prev, tag.id]);
-      onUpdated();
-    }
+    // La asignación va por el mismo camino durable que toggleTag: crear la
+    // etiqueta y que después no quede asignada es el peor de los dos mundos.
     setNewTagName('');
     setCreatingTag(false);
+    await toggleTag(tag.id);
   }
 
   async function addNote() {

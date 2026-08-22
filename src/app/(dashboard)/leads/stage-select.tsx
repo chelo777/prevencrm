@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
+import { durablePost } from "@/lib/durable-write-client";
 
 // Cambio de etapa inline desde la bandeja de leads. Select nativo (en el
 // teléfono abre el picker del sistema) vestido como el chip de etapa.
@@ -51,28 +52,24 @@ export function StageSelect({
 
     setStageId(next); // optimista
     setBusy(true);
-    try {
-      const res = await fetch("/api/leads/stage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dealId, stageId: next }),
-        keepalive: true, // sobrevive a que la pestaña pase a segundo plano / se descargue
-      });
-      if (!res.ok) {
-        setStageId(prev);
-        toast.error("No se pudo cambiar la etapa");
-      } else {
-        // Resync del server component: lo mostrado siempre coincide con la base.
-        router.refresh();
-      }
-    } catch {
-      // Si la pestaña se descargó (navegó a WhatsApp), el keepalive completa la
-      // escritura igual server-side; este catch es para fallas reales de red.
+
+    // keepalive sobrevive a que la pestaña se descargue (navegar a WhatsApp);
+    // la cola de reintento cubre lo que keepalive no cubre: quedarse sin señal.
+    const { ok, queued } = await durablePost({
+      id: `stage:${dealId}`,
+      url: "/api/leads/stage",
+      body: { dealId, stageId: next },
+    });
+
+    if (ok) {
+      // Resync del server component: lo mostrado siempre coincide con la base.
+      router.refresh();
+    } else if (!queued) {
+      // Rechazo permanente. Si quedó encolado dejamos la etapa optimista:
+      // la cola la aplica al volver la señal.
       setStageId(prev);
-      toast.error("No se pudo cambiar la etapa");
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   }
 
   return (
