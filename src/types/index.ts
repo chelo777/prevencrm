@@ -165,7 +165,12 @@ export interface Conversation {
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned';
+// `lead_assigned` ya existe en producción desde la migración 029 (aviso de
+// lead nuevo); el tipo tiene que reflejarlo o la UI lo trata como desconocido.
+export type NotificationType =
+  | "conversation_assigned"
+  | "lead_assigned"
+  | "lead_reclaimed";
 
 export interface Notification {
   id: string;
@@ -175,6 +180,8 @@ export interface Notification {
   type: NotificationType;
   conversation_id?: string;
   contact_id?: string;
+  /** Lead al que apunta (tipo `lead_reclaimed`) — deep-link a la bandeja. */
+  lead_id?: string;
   /** Who triggered it. Null when an automation/system assigned it. */
   actor_user_id?: string;
   title: string;

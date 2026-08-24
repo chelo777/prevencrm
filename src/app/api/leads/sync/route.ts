@@ -21,16 +21,19 @@ import { ingestLead } from "@/lib/leads/ingest";
 import { reconcileAllCapi } from "@/lib/leads/capi";
 import { reclaimStaleLeads } from "@/lib/leads/reclaim";
 import { syncCampaignInsights } from "@/lib/leads/insights";
-import { notifyNewLeads } from "@/lib/push/lead-alerts";
+import { notifyNewLeads, notifyReclaimedLeads } from "@/lib/push/lead-alerts";
 
 // Node runtime: usamos node:crypto (JWT de Google + SHA-256 de CAPI).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Reclamo: solo sobre leads creados desde que el feature está vivo (excluye el
-// backlog histórico). Actualizar a la fecha real de deploy.
+// backlog histórico). La ventana de inactividad en sí son STALE_DAYS días
+// desde la asignación (ver repository.ts) — esto es el corte de arranque.
 const RECLAIM_AFTER_ISO = "2026-07-18T00:00:00Z";
-const RECLAIM_DRY_RUN = true; // ⚠️ arrancar en true; pasar a false tras revisar logs.
+// Activo: el lead sin trabajar queda SIN ASIGNAR y se le avisa al admin. Ya
+// no se reasigna solo a otro asesor.
+const RECLAIM_DRY_RUN = false;
 
 /**
  * Cron de ingesta de leads de Meta (Fase 1 = Google Sheets) + feedback
@@ -128,8 +131,13 @@ export async function GET(request: Request) {
         dryRun: RECLAIM_DRY_RUN,
       });
       console.log(
-        `[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} reassigned=${reclaim.reassigned} (dryRun=${RECLAIM_DRY_RUN})`,
+        `[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} (dryRun=${RECLAIM_DRY_RUN})`,
       );
+      // Un push por corrida para los admins (la notificación in-app ya la
+      // dejó reclaimStaleLeads, una por lead para poder abrir cada uno).
+      if (reclaim.freed.length > 0) {
+        await notifyReclaimedLeads(admin, await repo.listAccountAdmins(), reclaim.freed);
+      }
     } catch (srcErr) {
       totals.ok = false;
       totals.message =
@@ -226,8 +234,13 @@ export async function GET(request: Request) {
         dryRun: RECLAIM_DRY_RUN,
       });
       console.log(
-        `[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} reassigned=${reclaim.reassigned} (dryRun=${RECLAIM_DRY_RUN})`,
+        `[sync] reclaim candidates=${reclaim.candidates} reclaimed=${reclaim.reclaimed} (dryRun=${RECLAIM_DRY_RUN})`,
       );
+      // Un push por corrida para los admins (la notificación in-app ya la
+      // dejó reclaimStaleLeads, una por lead para poder abrir cada uno).
+      if (reclaim.freed.length > 0) {
+        await notifyReclaimedLeads(admin, await repo.listAccountAdmins(), reclaim.freed);
+      }
     } catch (srcErr) {
       totals.ok = false;
       totals.message = srcErr instanceof Error ? srcErr.message : String(srcErr);

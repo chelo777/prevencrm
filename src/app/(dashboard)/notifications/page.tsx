@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import type { Notification } from "@/types";
-import { Bell, CheckCheck, Loader2, UserPlus } from "lucide-react";
+import { Bell, CheckCheck, Loader2, Target, UserMinus, UserPlus } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -13,10 +13,15 @@ import { PushToggle } from "@/components/push/push-toggle";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
-// Icon per notification type. Only one type exists today
-// (conversation_assigned) but this keeps future types a one-line add.
+// Icono por tipo de notificación.
 const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   conversation_assigned: UserPlus,
+  // Lead nuevo asignado (migración 029). Estaba sin icono propio y caía al
+  // genérico, siendo el tipo más frecuente de la cuenta.
+  lead_assigned: Target,
+  // Un lead que volvió a la cola por falta de trabajo: es una alerta para el
+  // admin, no una asignación.
+  lead_reclaimed: UserMinus,
 };
 
 export default function NotificationsPage() {
@@ -116,7 +121,10 @@ export default function NotificationsPage() {
   const handleClick = useCallback(
     (n: Notification) => {
       if (!n.read_at) markRead(n.id);
-      if (n.conversation_id) {
+      if (n.lead_id) {
+        // La bandeja lee ?lead y abre el panel de ese lead.
+        router.push(`/leads?lead=${n.lead_id}`);
+      } else if (n.conversation_id) {
         router.push(`/inbox?c=${n.conversation_id}`);
       }
     },

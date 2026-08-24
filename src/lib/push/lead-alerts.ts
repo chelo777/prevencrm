@@ -99,3 +99,41 @@ export async function notifyNewLeads(
     await sendPushToUsers(admin, recipients, buildLeadAlert(leads));
   }
 }
+
+/**
+ * Push agrupado de leads liberados por falta de trabajo, para los admins.
+ *
+ * Uno por corrida, no uno por lead: si el cron libera 5, el admin recibe
+ * "5 leads volvieron a la cola", igual que con los leads nuevos.
+ */
+export function buildReclaimAlert(
+  freed: { leadId: string; contactName: string | null; previousAgentName: string | null }[],
+): PushPayload {
+  if (freed.length === 1) {
+    const f = freed[0];
+    const lead = f.contactName?.trim() || "Sin nombre";
+    const quien = f.previousAgentName?.trim();
+    return {
+      title: "Lead liberado",
+      body: quien ? `${lead} — ${quien} no lo trabajó` : `${lead} volvió a la cola`,
+      url: `/leads?lead=${f.leadId}`,
+      tag: "lead-reclaimed",
+    };
+  }
+  return {
+    title: `${freed.length} leads liberados`,
+    body: "Volvieron a la cola por falta de trabajo. Están sin asignar.",
+    // Con varios no se puede apuntar a uno: la bandeja filtrada por sin asignar.
+    url: "/leads?asesora=none",
+    tag: "lead-reclaimed",
+  };
+}
+
+export async function notifyReclaimedLeads(
+  admin: SupabaseClient,
+  adminUserIds: string[],
+  freed: { leadId: string; contactName: string | null; previousAgentName: string | null }[],
+): Promise<void> {
+  if (!isPushConfigured() || freed.length === 0 || adminUserIds.length === 0) return;
+  await sendPushToUsers(admin, adminUserIds, buildReclaimAlert(freed));
+}

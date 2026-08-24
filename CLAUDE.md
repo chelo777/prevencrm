@@ -196,7 +196,26 @@ automática por deal.
 
 **Sin `last_synced_at`:** Lectura completa del rango en cada ciclo. La idempotencia la da el claim sobre `meta_lead_id`.
 
-**Asignación least-loaded:** `pickLeastLoaded()` cuenta deals abiertos por agente, asigna al de menor carga, rompe empates al azar.
+**Reparto 1-a-1 (`rotation.ts`):** recibe quien hace MÁS TIEMPO que no recibe
+— no quien menos acumuló. Vale igual para el pozo común (`pickLeastLoaded`) y
+para las tandas (`pickByQuota`), así el reparto no cambia de comportamiento
+según haya tandas cargadas o no.
+
+Antes ganaba el de menor cantidad: con una tanda en 0/50 y otra en 35/50, la
+primera se llevaba los 35 leads siguientes seguidos y la segunda quedaba seca
+hasta emparejarse. El turno lo marca ahora `lead_packages.last_delivered_at`
+(estampado al sellar) y, para el pozo común, la última asignación en
+`activity_log` dentro del ciclo. `delivered` sólo decide si la tanda llegó a su
+cupo. Una pausa no genera deuda: al volver se toma un turno y queda al día.
+
+**Reclamo de leads sin trabajar (`reclaim.ts`):** un lead que nadie trabajó
+queda **SIN ASIGNAR** y se le avisa a los admin (notificación in-app por lead +
+un push agrupado por corrida). NO se reasigna solo a otro asesor: eso movía el
+problema de escritorio sin hacerlo visible. "Trabajado" = nota, click-to-chat o
+**etiqueta** posterior a la asignación actual — el corte es por asignación para
+que un lead reasignado no arrastre el trabajo del asesor anterior. La ventana
+es `STALE_DAYS` (3 días) desde `assigned_at`; `RECLAIM_AFTER_ISO` excluye el
+backlog histórico.
 
 **CAPI compliance:** Solo se hashean email, phone, nombre con SHA-256. Las respuestas del formulario y datos de salud NUNCA salen del sistema. `raw_payload` restringido por RLS a owner/admin. La conversión se dispara cuando el deal llega a la etapa `trigger_stage_name` (la sync de estados hace que `closed-won` de la hoja llegue ahí).
 
@@ -353,6 +372,7 @@ control que se toque con el pulgar.
 029 — Módulo Leads Meta (lead_sources, leads, lead_capi_events, lead_intake_errors, lead_capi_config, lead_sync_runs)
 030 — Wizard de fuentes (sheet_status/synced_stage_id en leads, índice único de fuentes activas, contador stage_synced)
 031 — Fuente directa Meta Graph API (kind meta_api, meta_page_id, meta_form_ids)
+054 — Reparto 1-a-1 (lead_packages.last_delivered_at) + notificación de lead liberado
 ```
 
 ---

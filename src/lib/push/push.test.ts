@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLeadAlert } from "./lead-alerts";
+import { buildLeadAlert, buildReclaimAlert } from "./lead-alerts";
 
 describe("buildLeadAlert", () => {
   it("1 lead: nombre — campaña, deep-link al lead", () => {
@@ -42,5 +42,33 @@ describe("buildLeadAlert", () => {
     expect(alert.body).toContain("3");
     expect(alert.url).toBe("/leads");
     expect(alert.tag).toBe("new-lead");
+  });
+});
+
+describe("buildReclaimAlert", () => {
+  it("un lead: nombra el contacto y a quién se le quitó", () => {
+    const p = buildReclaimAlert([
+      { leadId: "l1", contactName: "Ana Pérez", previousAgentName: "Fabiana" },
+    ]);
+    expect(p.title).toBe("Lead liberado");
+    expect(p.body).toContain("Ana Pérez");
+    expect(p.body).toContain("Fabiana");
+    expect(p.url).toBe("/leads?lead=l1");
+  });
+
+  it("varios: un solo push agrupado, sin deep-link a uno", () => {
+    const p = buildReclaimAlert([
+      { leadId: "l1", contactName: "Ana", previousAgentName: "Fabiana" },
+      { leadId: "l2", contactName: "Beto", previousAgentName: "Alexis" },
+    ]);
+    expect(p.title).toBe("2 leads liberados");
+    expect(p.url).toBe("/leads?asesora=none");
+  });
+
+  it("sin nombre de contacto no rompe el mensaje", () => {
+    const p = buildReclaimAlert([
+      { leadId: "l1", contactName: null, previousAgentName: null },
+    ]);
+    expect(p.body).toContain("Sin nombre");
   });
 });
