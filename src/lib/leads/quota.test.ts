@@ -13,6 +13,7 @@ const pkg = (over: Partial<OpenPackage> = {}): OpenPackage & { status: "open" } 
   leadsTarget: over.leadsTarget ?? 50,
   delivered: over.delivered ?? 0,
   createdAt: over.createdAt ?? "2026-08-01T00:00:00Z",
+  lastDeliveredAt: over.lastDeliveredAt ?? null,
   status: "open",
 });
 
@@ -46,20 +47,30 @@ function lead(n: number): NormalizedLead {
 
 const QUOTA = { autoAssign: true, assignmentStrategy: "quota" as const };
 
-describe("pickByQuota (rotación pareja)", () => {
-  it("gana la tanda con menos entregados", () => {
+describe("pickByQuota (rotación 1-a-1)", () => {
+  it("gana la que hace más tiempo que no recibe, no la de menos entregados", () => {
+    // "b" es la que menos acumuló, pero acaba de recibir. El turno es de "a",
+    // que hace más que no recibe aunque lleve 10 entregados.
     const pick = pickByQuota([
-      pkg({ packageId: "a", delivered: 10 }),
-      pkg({ packageId: "b", delivered: 3 }),
-      pkg({ packageId: "c", delivered: 7 }),
+      pkg({ packageId: "a", delivered: 10, lastDeliveredAt: "2026-08-22T08:00:00Z" }),
+      pkg({ packageId: "b", delivered: 3, lastDeliveredAt: "2026-08-22T12:00:00Z" }),
+      pkg({ packageId: "c", delivered: 7, lastDeliveredAt: "2026-08-22T10:00:00Z" }),
     ]);
-    expect(pick?.packageId).toBe("b");
+    expect(pick?.packageId).toBe("a");
   });
 
-  it("empate en entregados → la tanda más vieja", () => {
+  it("una tanda que nunca recibió va antes que cualquiera que ya recibió", () => {
     const pick = pickByQuota([
-      pkg({ packageId: "nueva", delivered: 5, createdAt: "2026-08-05T00:00:00Z" }),
-      pkg({ packageId: "vieja", delivered: 5, createdAt: "2026-08-01T00:00:00Z" }),
+      pkg({ packageId: "vieja", delivered: 35, lastDeliveredAt: "2020-01-01T00:00:00Z" }),
+      pkg({ packageId: "estrenada", delivered: 0, lastDeliveredAt: null }),
+    ]);
+    expect(pick?.packageId).toBe("estrenada");
+  });
+
+  it("entre las que nunca recibieron → la tanda más vieja", () => {
+    const pick = pickByQuota([
+      pkg({ packageId: "nueva", createdAt: "2026-08-05T00:00:00Z" }),
+      pkg({ packageId: "vieja", createdAt: "2026-08-01T00:00:00Z" }),
     ]);
     expect(pick?.packageId).toBe("vieja");
   });
@@ -70,6 +81,37 @@ describe("pickByQuota (rotación pareja)", () => {
 
   it("sin tandas → null", () => {
     expect(pickByQuota([])).toBeNull();
+  });
+
+  // ── El caso reportado ──
+  it("una tanda 0/50 NO deja seca a una 35/50: se alternan de a uno", async () => {
+    const repo = new FakeRepo();
+    repo.packages = [
+      pkg({ packageId: "nueva", buyerUserId: "nueva-asesora", delivered: 0 }),
+      pkg({
+        packageId: "encurso",
+        buyerUserId: "asesora-con-35",
+        delivered: 35,
+        lastDeliveredAt: "2026-08-21T00:00:00Z",
+      }),
+    ];
+
+    const recibieron: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      repo.deals.push({ id: `d${i}`, assigned: null, stageId: "s1" });
+      const who = await assignByQuota(repo, `lead${i}`, `d${i}`);
+      recibieron.push(who!);
+    }
+
+    // Antes: los 6 iban a la tanda nueva (y los 29 siguientes también).
+    expect(recibieron).toEqual([
+      "nueva-asesora",
+      "asesora-con-35",
+      "nueva-asesora",
+      "asesora-con-35",
+      "nueva-asesora",
+      "asesora-con-35",
+    ]);
   });
 });
 

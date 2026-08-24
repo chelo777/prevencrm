@@ -122,6 +122,12 @@ export type CanonicalField =
 export interface EligibleAgent {
   userId: string;
   openDeals: number;
+  /**
+   * Cuándo recibió su último lead (ISO), o null si todavía no recibió
+   * ninguno en el ciclo. Es la clave de la rotación 1-a-1: se reparte por
+   * quién hace más que no recibe, no por quién acumuló menos.
+   */
+  lastAssignedAt: string | null;
 }
 
 /**
@@ -133,14 +139,32 @@ export interface OpenPackage {
   buyerUserId: string;
   leadsTarget: number;
   delivered: number;
-  /** Desempate: la tanda más vieja primero. */
+  /** Desempate entre tandas que nunca recibieron: la más vieja primero. */
   createdAt: string;
+  /**
+   * Cuándo se le entregó el último lead (ISO), o null si ninguno. Manda la
+   * rotación: `delivered` sólo decide si la tanda ya llegó a su cupo.
+   */
+  lastDeliveredAt: string | null;
+}
+
+/** Aviso al admin de que un lead volvió a la cola por no trabajarse. */
+export interface LeadReclaimedNotification {
+  /** Admin destinatario. */
+  userId: string;
+  leadId: string;
+  contactId: string | null;
+  title: string;
+  body: string;
 }
 
 /** Lead asignado pero sin trabajar, candidato a reclamo (pozo común). */
 export interface StaleLead {
   leadId: string;
   dealId: string;
+  /** Para el deep-link del aviso y el nombre del contacto. */
+  contactId?: string | null;
+  contactName?: string | null;
   assignedAgentId: string;
 }
 
@@ -217,6 +241,15 @@ export interface LeadRepository {
    * (recibidos de la tanda derivados de activity_log), no bloqueados.
    */
   listEligibleAgents(): Promise<EligibleAgent[]>;
+
+  /** user_ids de los owner/admin de la cuenta (destinatarios de los avisos). */
+  listAccountAdmins(): Promise<string[]>;
+
+  /** Nombre visible de un asesor, para redactar el aviso. */
+  getAgentName(userId: string): Promise<string | null>;
+
+  /** Avisa a un admin que se liberó un lead sin trabajar. */
+  notifyLeadReclaimed(input: LeadReclaimedNotification): Promise<void>;
 
   /**
    * Tandas `open` con cupo disponible, de compradores habilitados

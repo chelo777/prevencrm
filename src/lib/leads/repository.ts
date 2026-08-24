@@ -241,7 +241,21 @@ export function createLeadRepository(
         if (reclaimedError) throw reclaimedError;
         const received = (assigned ?? 0) - (reclaimed ?? 0);
         if (r.lead_cap != null && received >= r.lead_cap) continue; // auto-apagado por cupo
-        out.push({ userId: r.user_id, openDeals: received });
+
+        // Turno de la rotación 1-a-1: cuándo recibió su último lead. Se mira
+        // dentro del ciclo actual, igual que el contador, para que reanudar
+        // la recepción no arrastre la fecha de un ciclo viejo.
+        const { data: last, error: lastError } = await admin.from("activity_log")
+          .select("created_at")
+          .eq("user_id", r.user_id).eq("action", "lead_assigned").gte("created_at", since)
+          .order("created_at", { ascending: false }).limit(1).maybeSingle();
+        if (lastError) throw lastError;
+
+        out.push({
+          userId: r.user_id,
+          openDeals: received,
+          lastAssignedAt: (last?.created_at as string | null) ?? null,
+        });
       }
       return out;
     },
@@ -253,7 +267,7 @@ export function createLeadRepository(
       // frenar la entrega también en modo cuota, si no deja de ser un corte.
       const { data: pkgs, error: pkgErr } = await admin
         .from("lead_packages")
-        .select("id, buyer_user_id, leads_target, created_at")
+        .select("id, buyer_user_id, leads_target, created_at, last_delivered_at")
         .eq("account_id", accountId)
         .eq("status", "open")
         .order("created_at", { ascending: true });
@@ -288,6 +302,7 @@ export function createLeadRepository(
           leadsTarget: Number(p.leads_target),
           delivered: count ?? 0,
           createdAt: p.created_at as string,
+          lastDeliveredAt: (p.last_delivered_at as string | null) ?? null,
         });
       }
       return out;
@@ -304,13 +319,24 @@ export function createLeadRepository(
     },
 
     async sealLeadPackage(leadId: string, packageId: string) {
-      const { error } = await admin
+      const { data, error } = await admin
         .from("leads")
         .update({ package_id: packageId })
         .eq("id", leadId)
         .eq("account_id", accountId)
-        .is("package_id", null); // no re-sella un lead ya entregado
+        .is("package_id", null) // no re-sella un lead ya entregado
+        .select("id");
       if (error) throw error;
+      // Sólo corre el turno si el sello ocurrió de verdad: si el lead ya
+      // estaba entregado, la tanda no recibió nada y no le toca esperar.
+      if ((data ?? []).length === 0) return;
+
+      const { error: stampError } = await admin
+        .from("lead_packages")
+        .update({ last_delivered_at: new Date().toISOString() })
+        .eq("id", packageId)
+        .eq("account_id", accountId);
+      if (stampError) throw stampError;
     },
 
     async assignDealIfUnassigned(dealId, userId) {
@@ -353,24 +379,96 @@ export function createLeadRepository(
       if (dealsError) throw dealsError;
       const out: StaleLead[] = [];
       for (const d of deals ?? []) {
-        // "Trabajado" = nota manual o click-to-chat en contact_notes DESPUÉS de la asignación actual.
-        // (activity_log no sirve: la auto-asignación del router también registra "lead_assigned" ahí,
-        // lo que marcaría todo lead recién asignado como "trabajado" al instante.)
+        // "Trabajado" = nota manual, click-to-chat (contact_notes) o una
+        // ETIQUETA puesta DESPUÉS de la asignación actual. Etiquetar es señal
+        // suficiente de que el asesor lo miró: no hace falta que además le
+        // mueva la etapa.
+        //
+        // El corte es "después de la asignación actual", no "tiene alguna":
+        // si no, un lead reasignado arrastraría el trabajo del asesor
+        // anterior y nunca se liberaría.
+        //
+        // (activity_log no sirve como señal: la auto-asignación del router
+        // también registra "lead_assigned" ahí, lo que marcaría todo lead
+        // recién asignado como "trabajado" al instante.)
         const contactId = d.contact_id as string | null;
+        const since = (d.assigned_at as string) ?? (d.created_at as string);
         if (contactId) {
-          const { count, error: nErr } = await admin
-            .from("contact_notes")
-            .select("id", { count: "exact", head: true })
-            .eq("contact_id", contactId)
-            .gt("created_at", (d.assigned_at as string) ?? (d.created_at as string));
-          if (nErr) throw nErr;
-          if ((count ?? 0) > 0) continue; // trabajado: nota post-asignación (incluye click-to-chat)
+          const [notes, tags] = await Promise.all([
+            admin
+              .from("contact_notes")
+              .select("id", { count: "exact", head: true })
+              .eq("contact_id", contactId)
+              .gt("created_at", since),
+            admin
+              .from("contact_tags")
+              .select("tag_id", { count: "exact", head: true })
+              .eq("contact_id", contactId)
+              .gt("created_at", since),
+          ]);
+          if (notes.error) throw notes.error;
+          if (tags.error) throw tags.error;
+          if ((notes.count ?? 0) > 0 || (tags.count ?? 0) > 0) continue;
         }
-        const { data: lead, error: leadError } = await admin.from("leads").select("id").eq("deal_id", d.id as string).maybeSingle();
+
+        const { data: lead, error: leadError } = await admin
+          .from("leads")
+          .select("id, contact:contacts(name)")
+          .eq("deal_id", d.id as string)
+          .maybeSingle();
         if (leadError) throw leadError;
-        if (lead) out.push({ leadId: lead.id as string, dealId: d.id as string, assignedAgentId: d.assigned_agent_id as string });
+        if (lead) {
+          out.push({
+            leadId: lead.id as string,
+            dealId: d.id as string,
+            contactId,
+            contactName:
+              ((lead as { contact?: { name?: string | null } | null }).contact?.name) ?? null,
+            assignedAgentId: d.assigned_agent_id as string,
+          });
+        }
       }
       return out;
+    },
+
+    async listAccountAdmins() {
+      const { data, error } = await admin
+        .from("profiles")
+        .select("user_id, account_role")
+        .eq("account_id", accountId)
+        .in("account_role", ["owner", "admin"])
+        .eq("blocked", false);
+      if (error) throw error;
+      return (data ?? []).map((r) => r.user_id as string);
+    },
+
+    async getAgentName(userId: string) {
+      const { data, error } = await admin
+        .from("profiles")
+        .select("full_name")
+        .eq("account_id", accountId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data?.full_name as string | null) ?? null;
+    },
+
+    async notifyLeadReclaimed(input) {
+      // Best effort: que falle un aviso no puede dejar el lead a medio
+      // liberar. El deal ya quedó sin asignar, que es lo que importa.
+      const { error } = await admin.from("notifications").insert({
+        account_id: accountId,
+        user_id: input.userId,
+        type: "lead_reclaimed",
+        lead_id: input.leadId,
+        contact_id: input.contactId,
+        actor_user_id: null, // lo hizo el sistema, no una persona
+        title: input.title,
+        body: input.body,
+      });
+      if (error) {
+        console.error("[reclaim] no se pudo notificar:", error.message);
+      }
     },
 
     async getDealStage(dealId) {

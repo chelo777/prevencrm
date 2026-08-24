@@ -201,14 +201,26 @@ describe("ingestLead (claim-first)", () => {
   });
 });
 
-describe("pickLeastLoaded", () => {
-  it("elige al de menor carga", () => {
+describe("pickLeastLoaded (rotación 1-a-1)", () => {
+  it("elige al que hace más tiempo que no recibe, no al de menor carga", () => {
+    // El de menor carga acumulada es "a" (recibió menos), pero acaba de
+    // recibir: el turno es de "b". Mirar el acumulado era lo que dejaba a
+    // alguien sin leads durante toda una ráfaga.
     const pick = pickLeastLoaded([
-      { userId: "a", openDeals: 5 },
-      { userId: "b", openDeals: 1 },
+      { userId: "a", openDeals: 1, lastAssignedAt: "2026-08-22T12:00:00Z" },
+      { userId: "b", openDeals: 5, lastAssignedAt: "2026-08-22T09:00:00Z" },
     ]);
     expect(pick?.userId).toBe("b");
   });
+
+  it("quien nunca recibió va primero", () => {
+    const pick = pickLeastLoaded([
+      { userId: "a", openDeals: 9, lastAssignedAt: "2026-08-22T09:00:00Z" },
+      { userId: "nuevo", openDeals: 0, lastAssignedAt: null },
+    ]);
+    expect(pick?.userId).toBe("nuevo");
+  });
+
   it("devuelve null sin asesores", () => {
     expect(pickLeastLoaded([])).toBeNull();
   });

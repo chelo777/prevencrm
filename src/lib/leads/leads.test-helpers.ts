@@ -30,11 +30,24 @@ export class FakeRepo implements LeadRepository {
   deals: { id: string; assigned: string | null; stageId: string }[] = [];
   quarantined: { reason: string }[] = [];
   eligible: EligibleAgent[] = [
-    { userId: "u1", openDeals: 0 },
-    { userId: "u2", openDeals: 1 },
+    { userId: "u1", openDeals: 0, lastAssignedAt: null },
+    { userId: "u2", openDeals: 1, lastAssignedAt: null },
   ];
+  /** Reloj del fake: cada entrega avanza un tick, para ordenar la rotación. */
+  private tick = 0;
   events: { userId: string; dealId: string; kind: AssignEventKind }[] = [];
   stale: StaleLead[] = [];
+  /** Admins que reciben los avisos de lead liberado. */
+  admins: string[] = ["admin1"];
+  /** user_id -> nombre visible, para redactar el aviso. */
+  agentNames: Record<string, string> = {};
+  notifications: {
+    userId: string;
+    leadId: string;
+    contactId: string | null;
+    title: string;
+    body: string;
+  }[] = [];
   /** Tandas del modo `quota`. `delivered` lo lleva el propio fake al sellar. */
   packages: (OpenPackage & { status: "open" | "completed" })[] = [];
   /** Sellos leads.package_id aplicados (leadId -> packageId). */
@@ -98,13 +111,23 @@ export class FakeRepo implements LeadRepository {
     // replica eso devolviendo solo las abiertas.
     return this.packages
       .filter((p) => p.status === "open")
-      .map(({ packageId, buyerUserId, leadsTarget, delivered, createdAt }) => ({
-        packageId,
-        buyerUserId,
-        leadsTarget,
-        delivered,
-        createdAt,
-      }));
+      .map(
+        ({
+          packageId,
+          buyerUserId,
+          leadsTarget,
+          delivered,
+          createdAt,
+          lastDeliveredAt,
+        }) => ({
+          packageId,
+          buyerUserId,
+          leadsTarget,
+          delivered,
+          createdAt,
+          lastDeliveredAt: lastDeliveredAt ?? null,
+        }),
+      );
   }
   async markPackageCompleted(packageId: string) {
     const p = this.packages.find((x) => x.packageId === packageId);
@@ -114,7 +137,11 @@ export class FakeRepo implements LeadRepository {
     if (this.sealed.has(leadId)) return; // no re-sella
     this.sealed.set(leadId, packageId);
     const p = this.packages.find((x) => x.packageId === packageId);
-    if (p) p.delivered++;
+    if (p) {
+      p.delivered++;
+      // Espeja el adaptador real: sellar corre el turno de la tanda.
+      p.lastDeliveredAt = `2026-08-22T00:00:${String(this.tick++).padStart(2, "0")}Z`;
+    }
   }
   async assignDealIfUnassigned(dealId: string, userId: string): Promise<boolean> {
     const d = this.deals.find((x) => x.id === dealId);
@@ -126,10 +153,33 @@ export class FakeRepo implements LeadRepository {
   }
   async recordAssignEvent(userId: string, dealId: string, kind: AssignEventKind) {
     this.events.push({ userId, dealId, kind });
+    // El adaptador real deriva `lastAssignedAt` del activity_log: registrar
+    // la asignación es lo que corre el turno del asesor en el pozo común.
+    if (kind === "lead_assigned") {
+      const agent = this.eligible.find((a) => a.userId === userId);
+      if (agent) {
+        agent.lastAssignedAt = `2026-08-22T00:00:${String(this.tick++).padStart(2, "0")}Z`;
+      }
+    }
   }
   async unassignDeal(dealId: string) {
     const d = this.deals.find((x) => x.id === dealId);
     if (d) d.assigned = null;
+  }
+  async listAccountAdmins() {
+    return this.admins;
+  }
+  async getAgentName(userId: string) {
+    return this.agentNames[userId] ?? null;
+  }
+  async notifyLeadReclaimed(input: {
+    userId: string;
+    leadId: string;
+    contactId: string | null;
+    title: string;
+    body: string;
+  }) {
+    this.notifications.push(input);
   }
   async listStaleAssignedLeads() {
     return this.stale;

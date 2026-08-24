@@ -14,6 +14,7 @@
 // 'claimed' con contact_id/deal_id ya seteados y retoma sin duplicar.
 // ============================================================
 
+import { pickLeastRecentlyServed } from "./rotation";
 import type {
   ClaimedLead,
   EligibleAgent,
@@ -52,35 +53,41 @@ export function resolveStage(
   return null;
 }
 
-/** Elige el asesor con menos deals abiertos; desempata al azar. */
+/**
+ * Elige al asesor que hace MÁS TIEMPO que no recibe un lead (rotación 1-a-1).
+ *
+ * Antes ganaba el de menos leads recibidos en el ciclo, y eso hacía que quien
+ * arrancaba un ciclo nuevo acaparara la ráfaga hasta emparejarse con el
+ * resto. El pozo común y el reparto por tandas siguen ahora la misma regla:
+ * el reparto no cambia de comportamiento según haya tandas cargadas o no.
+ */
 export function pickLeastLoaded(
   agents: EligibleAgent[],
 ): EligibleAgent | null {
-  if (agents.length === 0) return null;
-  const min = Math.min(...agents.map((a) => a.openDeals));
-  const pool = agents.filter((a) => a.openDeals === min);
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pickLeastRecentlyServed(
+    agents,
+    (a) => a.lastAssignedAt,
+    // Sin fecha de alta a mano: el userId da un orden estable y arbitrario
+    // para los que nunca recibieron, y el azar rompe el empate igual.
+    (a) => a.userId,
+  );
 }
 
 /**
- * Rotación pareja entre tandas abiertas (handoff §4): gana la de MENOS
- * entregados; empate, la tanda más vieja; empate, al azar. Las que ya
- * llegaron al cupo quedan fuera (el llamador las cierra).
+ * Rotación 1-a-1 entre tandas abiertas: gana la que hace MÁS TIEMPO que no
+ * recibe. Las que ya llegaron al cupo quedan fuera (el llamador las cierra).
+ *
+ * Antes ganaba la de menos entregados, y con una tanda en 0/50 y otra en
+ * 35/50 la primera se llevaba 35 leads seguidos mientras la segunda quedaba
+ * seca. `delivered` ahora sólo decide si queda cupo, no el turno.
  */
 export function pickByQuota(packages: OpenPackage[]): OpenPackage | null {
   const withRoom = packages.filter((p) => p.delivered < p.leadsTarget);
-  if (withRoom.length === 0) return null;
-
-  const minDelivered = Math.min(...withRoom.map((p) => p.delivered));
-  const leastServed = withRoom.filter((p) => p.delivered === minDelivered);
-  if (leastServed.length === 1) return leastServed[0];
-
-  const oldest = leastServed.reduce(
-    (min, p) => (p.createdAt < min.createdAt ? p : min),
-    leastServed[0],
+  return pickLeastRecentlyServed(
+    withRoom,
+    (p) => p.lastDeliveredAt,
+    (p) => p.createdAt,
   );
-  const tied = leastServed.filter((p) => p.createdAt === oldest.createdAt);
-  return tied[Math.floor(Math.random() * tied.length)];
 }
 
 export async function ingestLead(
