@@ -210,6 +210,14 @@ export interface LeadRepository {
    */
   claimLead(metaLeadId: string): Promise<ClaimedLead>;
 
+  /**
+   * Opcional: precarga en UN request el estado de los leads ya existentes de
+   * la tanda, para que `claimLead` resuelva los ya procesados sin tocar la
+   * base. Sin esto el cron hace 2 requests por lead ya ingestado en cada
+   * corrida (la lectura es completa, sin watermark).
+   */
+  primeClaims?(metaLeadIds: string[]): Promise<void>;
+
   /** Resuelve o crea el contacto por teléfono (dedupe estilo 022). */
   findOrCreateContact(input: {
     phoneE164: string | null;

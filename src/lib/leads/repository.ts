@@ -28,6 +28,8 @@ const DEAL_CURRENCY = "ARS";
 const STALE_DAYS = 3;
 /** Tope de candidatos procesados por corrida del reclamo (acota el N+1). */
 const RECLAIM_BATCH = 50;
+/** Ids por request en primeClaims (acota el largo de la URL del `in`). */
+const PRIME_CHUNK = 200;
 
 export function createLeadRepository(
   admin: SupabaseClient,
@@ -70,8 +72,42 @@ export function createLeadRepository(
     return created.id as string;
   }
 
+  /**
+   * Leads ya PROCESADOS, precargados por primeClaims (dentro de una corrida).
+   * Solo se cachea 'processed': un 'claimed' a medio hacer tiene que pasar
+   * por la base para reanudar con el checkpoint real.
+   */
+  const claimCache = new Map<string, ClaimedLead>();
+
   return {
+    async primeClaims(metaLeadIds: string[]): Promise<void> {
+      const ids = [...new Set(metaLeadIds)].filter((id) => id && !claimCache.has(id));
+      for (let i = 0; i < ids.length; i += PRIME_CHUNK) {
+        const { data, error } = await admin
+          .from("leads")
+          .select("id, meta_lead_id, contact_id, deal_id, sheet_status, synced_stage_id")
+          .eq("account_id", accountId)
+          .eq("status", "processed")
+          .in("meta_lead_id", ids.slice(i, i + PRIME_CHUNK));
+        if (error) throw error;
+        for (const row of data ?? []) {
+          claimCache.set(row.meta_lead_id as string, {
+            leadId: row.id as string,
+            status: "processed",
+            isNew: false,
+            dealId: (row.deal_id as string | null) ?? null,
+            contactId: (row.contact_id as string | null) ?? null,
+            sheetStatus: (row.sheet_status as string | null) ?? null,
+            syncedStageId: (row.synced_stage_id as string | null) ?? null,
+          });
+        }
+      }
+    },
+
     async claimLead(metaLeadId: string): Promise<ClaimedLead> {
+      const cached = claimCache.get(metaLeadId);
+      if (cached) return cached;
+
       // INSERT ... ON CONFLICT DO NOTHING (ignoreDuplicates).
       const { data: inserted, error } = await admin
         .from("leads")

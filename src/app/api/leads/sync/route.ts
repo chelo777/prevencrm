@@ -94,6 +94,15 @@ export async function GET(request: Request) {
       const { mapRow } = createLeadMapper(raw, source.columnMapping);
       const repo = createLeadRepository(admin, source);
 
+      // La hoja se relee entera en cada corrida: sin esta precarga cada fila
+      // ya ingestada cuesta 2 requests a Supabase, cada pocos minutos.
+      await repo.primeClaims?.(
+        raw.rows.flatMap((row) => {
+          const id = mapRow(row).lead?.metaLeadId;
+          return id ? [id] : [];
+        }),
+      );
+
       for (const row of raw.rows) {
         try {
           const { lead, error } = mapRow(row);
@@ -194,6 +203,9 @@ export async function GET(request: Request) {
           const batch = await fetchFormLeads(formId, pageToken, after);
           if (batch.leads.length === 0) break;
           totals.rowsRead += batch.leads.length;
+
+          // Un request por página en vez de 2 por lead ya ingestado.
+          await repo.primeClaims?.(batch.leads.map((l) => `l:${l.id}`));
 
           let duplicates = 0;
           for (const rawLead of batch.leads) {
