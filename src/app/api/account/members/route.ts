@@ -27,12 +27,6 @@ interface ProfileRow {
   receiving_since: string | null;
 }
 
-interface ActivityLogRow {
-  user_id: string;
-  action: string;
-  created_at: string;
-}
-
 type MemberOut = AccountMember & {
   allowed_modules: string[] | null;
   blocked: boolean;
@@ -70,22 +64,48 @@ export async function GET() {
     // "Recibidos en la tanda" es derivado de activity_log (lead_assigned −
     // lead_reclaimed desde receiving_since de cada miembro), no una columna
     // mutable. Esta información es confidencial (admin-only): un no-admin no
-    // debería ver la carga de sus compañeros. Solo en admin, una sola query
-    // trae todo el historial relevante de la cuenta y se agrega en memoria
-    // por user_id — pocos miembros por cuenta, así que esto evita N+1 sin
-    // necesitar un `since` distinto por fila.
-    let activityByUser = new Map<string, ActivityLogRow[]>();
+    // debería ver la carga de sus compañeros.
+    //
+    // Se cuenta con `count: "exact", head: true` por miembro (igual que el
+    // router en listEligibleAgents) y NO trayendo las filas: PostgREST corta
+    // en 1000 filas por request, y traer todo el historial de la cuenta sin
+    // filtrar devolvía sólo las más viejas — todas anteriores a
+    // receiving_since — y el contador quedaba clavado en 0.
+    const receivedByUser = new Map<string, number>();
 
     if (canSeeEmails) {
-      const { data: activityRows, error: activityError } = await ctx.supabase
-        .from("activity_log")
-        .select("user_id, action, created_at")
-        .eq("account_id", ctx.accountId)
-        .in("action", ["lead_assigned", "lead_reclaimed"]);
+      const countSince = async (
+        userId: string,
+        action: "lead_assigned" | "lead_reclaimed",
+        since: string,
+      ): Promise<number> => {
+        const { count, error: countError } = await ctx.supabase
+          .from("activity_log")
+          .select("id", { count: "exact", head: true })
+          .eq("account_id", ctx.accountId)
+          .eq("user_id", userId)
+          .eq("action", action)
+          .gte("created_at", since);
+        if (countError) throw countError;
+        return count ?? 0;
+      };
 
-      if (activityError) {
+      try {
+        await Promise.all(
+          profileRows
+            .filter((row) => row.receiving_since)
+            .map(async (row) => {
+              const since = row.receiving_since as string;
+              const [assigned, reclaimed] = await Promise.all([
+                countSince(row.user_id, "lead_assigned", since),
+                countSince(row.user_id, "lead_reclaimed", since),
+              ]);
+              receivedByUser.set(row.user_id, Math.max(0, assigned - reclaimed));
+            }),
+        );
+      } catch (activityError) {
         console.error(
-          "[GET /api/account/members] activity_log fetch error:",
+          "[GET /api/account/members] activity_log count error:",
           activityError,
         );
         return NextResponse.json(
@@ -93,33 +113,6 @@ export async function GET() {
           { status: 500 },
         );
       }
-
-      for (const row of activityRows as ActivityLogRow[]) {
-        const list = activityByUser.get(row.user_id);
-        if (list) {
-          list.push(row);
-        } else {
-          activityByUser.set(row.user_id, [row]);
-        }
-      }
-    }
-
-    function receivedThisCycle(
-      userId: string,
-      receivingSince: string | null,
-    ): number {
-      if (!receivingSince) return 0;
-      const since = new Date(receivingSince).getTime();
-      const rows = activityByUser.get(userId);
-      if (!rows) return 0;
-      let assigned = 0;
-      let reclaimed = 0;
-      for (const row of rows) {
-        if (new Date(row.created_at).getTime() < since) continue;
-        if (row.action === "lead_assigned") assigned += 1;
-        else if (row.action === "lead_reclaimed") reclaimed += 1;
-      }
-      return Math.max(0, assigned - reclaimed);
     }
 
     const members: MemberOut[] = profileRows.flatMap((row) => {
@@ -139,10 +132,7 @@ export async function GET() {
           blocked: Boolean(row.blocked),
           receiving_leads: Boolean(row.receiving_leads),
           lead_cap: row.lead_cap,
-          received_this_cycle: receivedThisCycle(
-            row.user_id,
-            row.receiving_since,
-          ),
+          received_this_cycle: receivedByUser.get(row.user_id) ?? 0,
         },
       ];
     });
