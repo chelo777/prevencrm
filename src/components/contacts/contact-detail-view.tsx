@@ -11,6 +11,8 @@ import {
   TemplatePicker,
   type TemplateSendValues,
 } from '@/components/inbox/template-picker';
+import { QuickSendSheet } from '@/components/quick-messages/quick-send-sheet';
+import { toWhatsAppNumber } from '@/lib/leads/phone';
 import {
   Sheet,
   SheetContent,
@@ -39,6 +41,7 @@ import {
   X,
   LayoutTemplate,
   ChevronDown,
+  MessageCircle,
 } from 'lucide-react';
 import { humanizeFieldName, humanizeFormValue } from '@/lib/leads/humanize';
 
@@ -89,6 +92,11 @@ export function ContactDetailView({
   // find-or-creates the conversation, so no inbound message is required.
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [sendingTemplate, setSendingTemplate] = useState(false);
+
+  // Mensajes rápidos (click-to-chat por wa.me), igual que en la bandeja.
+  // El lead da la campaña para {{campaña}} y el id para la traza.
+  const [quickSendOpen, setQuickSendOpen] = useState(false);
+  const [lead, setLead] = useState<{ id: string; campaign: string | null } | null>(null);
 
   // Details tab
   const [editName, setEditName] = useState('');
@@ -226,6 +234,39 @@ export function ContactDetailView({
     setLoadingDeals(false);
   }, [contactId, supabase]);
 
+  // Lead más reciente del contacto (si vino de Meta). Un contacto cargado
+  // a mano no tiene: los mensajes rápidos andan igual, sin traza.
+  const fetchLead = useCallback(async () => {
+    if (!contactId) return;
+    const { data } = await supabase
+      .from('leads')
+      .select('id, campaign_name, form_name')
+      .eq('contact_id', contactId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    setLead(
+      data
+        ? { id: data.id as string, campaign: (data.campaign_name ?? data.form_name ?? null) as string | null }
+        : null,
+    );
+  }, [contactId, supabase]);
+
+  // Traza click-to-chat — best effort, no bloquea. keepalive porque acto
+  // seguido se abre WhatsApp y el SO puede suspender la pestaña. La nota
+  // que crea el endpoint cuenta como "trabajado" para el reclamo.
+  function onQuickSent() {
+    if (!lead) return;
+    fetch('/api/leads/contacted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadId: lead.id }),
+      keepalive: true,
+    })
+      .then(() => fetchNotes())
+      .catch(() => {});
+  }
+
   // Asesoras compradoras (para el selector de reasignación del admin).
   const fetchAsesoras = useCallback(async () => {
     if (!accountId || !canManageMembers) return;
@@ -290,8 +331,9 @@ export function ContactDetailView({
       fetchDeals();
       fetchStages();
       fetchAsesoras();
+      fetchLead();
     }
-  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, fetchStages, fetchAsesoras]);
+  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, fetchStages, fetchAsesoras, fetchLead]);
 
   async function changeStage(nextStageId: string) {
     const primary = deals[0];
@@ -640,6 +682,8 @@ export function ContactDetailView({
     }
   }
 
+  const waNumber = toWhatsAppNumber(contact?.phone ? contact.phone.replace(/\D/g, '') : '');
+
   function getInitials(name?: string | null) {
     if (!name) return '?';
     return name
@@ -785,7 +829,7 @@ export function ContactDetailView({
                   </select>
                 </div>
               )}
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
                   size="sm"
                   onClick={() => setTemplatePickerOpen(true)}
@@ -798,6 +842,17 @@ export function ContactDetailView({
                     <LayoutTemplate className="size-4" />
                   )}
                   Enviar plantilla
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setQuickSendOpen(true)}
+                  disabled={!waNumber}
+                  title={waNumber ? 'Abrir WhatsApp con un mensaje rápido' : 'Teléfono no válido'}
+                  className="border-emerald-500/40 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-300"
+                >
+                  <MessageCircle className="size-4" />
+                  Mensajes rápidos
                 </Button>
               </div>
             </SheetHeader>
@@ -1234,6 +1289,15 @@ export function ContactDetailView({
       onOpenChange={setTemplatePickerOpen}
       onSelect={handleSendTemplate}
     />
+    {waNumber && (
+      <QuickSendSheet
+        open={quickSendOpen}
+        onOpenChange={setQuickSendOpen}
+        waNumber={waNumber}
+        vars={{ nombre: contact?.name ?? null, campania: lead?.campaign ?? null }}
+        onSent={onQuickSent}
+      />
+    )}
     </>
   );
 }
