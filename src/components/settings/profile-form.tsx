@@ -17,6 +17,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { SettingsPanelHead } from './settings-panel-head';
 import { ROLE_META } from './role-meta';
+import { normalizeArgentinePhone, toWhatsAppNumber } from '@/lib/leads/phone';
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const ALLOWED_MIME = new Set([
@@ -38,6 +39,10 @@ export function ProfileForm() {
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [whatsapp, setWhatsapp] = useState('');
+  // Se lee aparte del perfil global (use-auth): si la columna todavía no
+  // existe (migración 055 sin aplicar) falla solo este campo, no el login.
+  const [savedWhatsapp, setSavedWhatsapp] = useState('');
   const [pendingAvatar, setPendingAvatar] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
@@ -50,6 +55,25 @@ export function ProfileForm() {
     setFullName(profile.full_name ?? '');
     setEmail(profile.email ?? '');
   }, [profile]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    supabase
+      .from('profiles')
+      .select('whatsapp_phone')
+      .eq('user_id', user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const phone = (data?.whatsapp_phone as string | null) ?? '';
+        setSavedWhatsapp(phone);
+        setWhatsapp(phone);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, supabase]);
 
   // Cleanup object URLs to avoid leaks.
   useEffect(() => {
@@ -111,6 +135,18 @@ export function ProfileForm() {
       return;
     }
 
+    // WhatsApp opcional; si está, tiene que ser un celular AR válido
+    // (es adonde el prospecto manda la declaración de salud).
+    let nextWhatsapp: string | null = null;
+    if (whatsapp.trim()) {
+      const phone = normalizeArgentinePhone(whatsapp);
+      if (!phone.valid) {
+        toast.error('Ingresá tu WhatsApp con código de área, ej. 351 277 4629');
+        return;
+      }
+      nextWhatsapp = toWhatsAppNumber(phone.digits);
+    }
+
     setSaving(true);
     try {
       let nextAvatarUrl: string | null = profile.avatar_url ?? null;
@@ -144,6 +180,7 @@ export function ProfileForm() {
         .update({
           full_name: trimmedName,
           avatar_url: nextAvatarUrl,
+          whatsapp_phone: nextWhatsapp,
         })
         .eq('user_id', user.id);
       if (updateError) {
@@ -171,6 +208,8 @@ export function ProfileForm() {
         emailSent = true;
       }
 
+      setSavedWhatsapp(nextWhatsapp ?? '');
+      setWhatsapp(nextWhatsapp ?? '');
       setEmailChangePending(emailSent);
       setPendingAvatar(null);
       setPreviewUrl(null);
@@ -194,6 +233,7 @@ export function ProfileForm() {
     !!profile &&
     (fullName.trim() !== (profile.full_name ?? '') ||
       email.trim().toLowerCase() !== (profile.email ?? '').toLowerCase() ||
+      whatsapp.trim() !== savedWhatsapp ||
       pendingAvatar !== null ||
       removeAvatar);
 
@@ -299,6 +339,27 @@ export function ProfileForm() {
                 </span>
               </p>
             )}
+          </div>
+
+          {/* WhatsApp */}
+          <div className="space-y-2">
+            <Label htmlFor="profile-whatsapp" className="text-foreground">
+              Tu WhatsApp
+            </Label>
+            <Input
+              id="profile-whatsapp"
+              type="tel"
+              inputMode="tel"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+              placeholder="351 277 4629"
+              maxLength={30}
+              disabled={saving}
+            />
+            <p className="text-xs text-muted-foreground">
+              Las declaraciones de salud que respondan tus leads te llegan a
+              este número.
+            </p>
           </div>
 
           {/* Read-only block */}

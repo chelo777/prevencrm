@@ -275,6 +275,30 @@ Todo cambio queda en `activity_log` (`stage_change`, `tag_added`,
 
 ---
 
+## Declaraciones de salud (`src/lib/health-declarations/`, migración 055)
+
+Botón "Declaración de salud" en el detalle del lead → `POST /api/health-declarations`
+crea un enlace único `/ds/<token>` (en la base solo el SHA-256 del token) y el
+asesor lo manda por WhatsApp. El prospecto completa un formulario mobile (titular
++ grupo familiar; las preguntas de mujer aparecen al elegir "Mujer"), toca
+Guardar → `POST /api/health-declarations/<token>` (público, service role) valida
+con `parseDeclaration()`, arma el texto con `formatDeclaration()` **en el
+servidor**, lo guarda como nota del contacto (a nombre del asesor) y el
+navegador salta al WhatsApp del asesor con el texto listo (y copiado).
+
+- El destino es `profiles.whatsapp_phone` del asesor que creó el enlace
+  (Ajustes → Tu perfil), copiado en `health_declarations.advisor_phone`.
+  Sin ese número no se puede crear el enlace (409 `missing_whatsapp`).
+- Una sola respuesta por enlace (UPDATE filtra `status='pending'`); vence a los 30 días.
+- Historial: pestaña "Declaraciones" del detalle del lead, lee de la tabla (no de
+  las notas, que se pueden borrar). La tabla no tiene policies de UPDATE/DELETE.
+- El enlace muestra la declaración respondida solo `SUMMARY_VISIBLE_DAYS` (7) días
+  después de responder; luego solo "ya la enviaste".
+- `/ds` NO va en `PUBLIC_ROUTES`: cada página tiene datos de una persona.
+- Datos de salud: nunca salen hacia Meta/CAPI.
+
+---
+
 ## Cache-Control: privado por defecto (`next.config.ts`)
 
 **Toda página que no esté en `PUBLIC_ROUTES` sale con `private, no-store`.**
@@ -373,6 +397,7 @@ control que se toque con el pulgar.
 030 — Wizard de fuentes (sheet_status/synced_stage_id en leads, índice único de fuentes activas, contador stage_synced)
 031 — Fuente directa Meta Graph API (kind meta_api, meta_page_id, meta_form_ids)
 054 — Reparto 1-a-1 (lead_packages.last_delivered_at) + notificación de lead liberado
+055 — Declaraciones de salud por enlace (health_declarations, profiles.whatsapp_phone)
 ```
 
 ---

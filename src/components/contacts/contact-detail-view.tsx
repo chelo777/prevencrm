@@ -12,6 +12,8 @@ import {
   type TemplateSendValues,
 } from '@/components/inbox/template-picker';
 import { QuickSendSheet } from '@/components/quick-messages/quick-send-sheet';
+import { SendDeclarationSheet } from '@/components/health-declarations/send-declaration-sheet';
+import { DeclarationsList } from '@/components/health-declarations/declarations-list';
 import { toWhatsAppNumber } from '@/lib/leads/phone';
 import {
   Sheet,
@@ -42,6 +44,7 @@ import {
   LayoutTemplate,
   ChevronDown,
   MessageCircle,
+  ClipboardList,
 } from 'lucide-react';
 import { humanizeFieldName, humanizeFormValue } from '@/lib/leads/humanize';
 
@@ -97,6 +100,12 @@ export function ContactDetailView({
   // El lead da la campaña para {{campaña}} y el id para la traza.
   const [quickSendOpen, setQuickSendOpen] = useState(false);
   const [lead, setLead] = useState<{ id: string; campaign: string | null } | null>(null);
+
+  // Declaración de salud: enlace único que el prospecto completa en el
+  // celular y que vuelve al WhatsApp del asesor (y a las notas).
+  const [declarationOpen, setDeclarationOpen] = useState(false);
+  // Al cerrar el panel de envío, la pestaña Declaraciones se relee.
+  const [declarationsKey, setDeclarationsKey] = useState(0);
 
   // Details tab
   const [editName, setEditName] = useState('');
@@ -854,6 +863,16 @@ export function ContactDetailView({
                   <MessageCircle className="size-4" />
                   Mensajes rápidos
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setDeclarationOpen(true)}
+                  disabled={!waNumber}
+                  title={waNumber ? 'Mandar el enlace de declaración de salud' : 'Teléfono no válido'}
+                >
+                  <ClipboardList className="size-4" />
+                  Declaración de salud
+                </Button>
               </div>
             </SheetHeader>
 
@@ -887,6 +906,12 @@ export function ContactDetailView({
                   className="data-active:bg-muted data-active:text-primary text-muted-foreground"
                 >
                   Notas
+                </TabsTrigger>
+                <TabsTrigger
+                  value="declarations"
+                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                >
+                  Declaraciones
                 </TabsTrigger>
                 <TabsTrigger
                   value="custom"
@@ -1136,6 +1161,13 @@ export function ContactDetailView({
               </TabsContent>
 
               {/* Custom Fields Tab */}
+              {/* Declaraciones de salud */}
+              <TabsContent value="declarations" className="flex-1 overflow-y-auto px-4 py-3">
+                {contactId && (
+                  <DeclarationsList contactId={contactId} refreshKey={declarationsKey} />
+                )}
+              </TabsContent>
+
               <TabsContent value="custom" className="flex-1 overflow-y-auto px-4 py-3">
                 {loadingCustom ? (
                   <div className="flex items-center justify-center py-8">
@@ -1295,6 +1327,19 @@ export function ContactDetailView({
         onOpenChange={setQuickSendOpen}
         waNumber={waNumber}
         vars={{ nombre: contact?.name ?? null, campania: lead?.campaign ?? null }}
+        onSent={onQuickSent}
+      />
+    )}
+    {waNumber && contactId && (
+      <SendDeclarationSheet
+        open={declarationOpen}
+        onOpenChange={(next) => {
+          setDeclarationOpen(next);
+          if (!next) setDeclarationsKey((k) => k + 1);
+        }}
+        contactId={contactId}
+        contactName={contact?.name ?? null}
+        waNumber={waNumber}
         onSent={onQuickSent}
       />
     )}
