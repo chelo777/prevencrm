@@ -76,7 +76,7 @@ export const QUESTIONS: Question[] = [
     key: "glasses",
     label: "¿Usás lentes?",
     short: "Lentes",
-    detailLabel: "¿Por qué?",
+    detailLabel: "Cirugía ocular u otro problema de visión (opcional)",
   },
   {
     key: "pregnancy",
@@ -89,12 +89,27 @@ export const QUESTIONS: Question[] = [
     key: "contraceptive",
     label: "¿Tenés algún dispositivo anticonceptivo colocado?",
     short: "Dispositivo anticonceptivo",
-    detailLabel: "¿Cuál? Mes y año de colocación",
+    detailLabel: "¿Cuál?",
     female: true,
   },
 ];
 
 export const GLASSES_OPTIONS = ["Miopía", "Astigmatismo", "Presbicia"] as const;
+
+export const CONTRACEPTIVE_OPTIONS = [
+  "DIU de cobre",
+  "DIU hormonal (Mirena)",
+  "Implante subdérmico",
+  "Otro",
+] as const;
+
+/** Graduación en dioptrías por ojo (texto tal como figura en la receta). */
+export interface EyeRx {
+  /** Ojo derecho. */
+  od: string;
+  /** Ojo izquierdo. */
+  oi: string;
+}
 
 export const RELATION_LABEL: Record<Relation, string> = {
   titular: "Titular",
@@ -113,6 +128,12 @@ export interface Member {
   answers: Record<string, YesNoAnswer>;
   /** Tipo de lente; solo si glasses = "si". */
   glassesTypes: string[];
+  /** Graduación por tipo elegido (clave = el tipo). Opcional. */
+  glassesRx: Record<string, EyeRx>;
+  /** Solo mujeres con contraceptive = "si". */
+  contraceptiveType: string;
+  /** Mes y año de colocación, "YYYY-MM". */
+  contraceptiveMonth: string;
   /** Fecha de última menstruación (YYYY-MM-DD); solo mujeres. */
   lastPeriod: string;
 }
@@ -155,6 +176,9 @@ export function emptyMember(relation: Relation): Member {
       QUESTIONS.map((q) => [q.key, { value: null, detail: "" }]),
     ),
     glassesTypes: [],
+    glassesRx: {},
+    contraceptiveType: "",
+    contraceptiveMonth: "",
     lastPeriod: "",
   };
 }
@@ -183,6 +207,16 @@ function yesNo(v: unknown): YesNoAnswer {
 /** Número con coma o punto ("51,5", "3.850"). */
 function isNumberish(v: string): boolean {
   return /^\d{1,3}([.,]\d{1,3})?$/.test(v);
+}
+
+/** Dioptrías como en la receta: "-2,50", "+1.75", "0,5". */
+function isDiopter(v: string): boolean {
+  return /^[+-]?\d{1,2}([.,]\d{1,2})?$/.test(v);
+}
+
+function isYearMonth(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})$/.exec(v);
+  return !!m && Number(m[2]) >= 1 && Number(m[2]) <= 12;
 }
 
 function isIsoDate(v: string): boolean {
@@ -221,6 +255,31 @@ export function parseDeclaration(input: unknown): {
       answers.glasses?.value === "si" && Array.isArray(o.glassesTypes)
         ? GLASSES_OPTIONS.filter((g) => (o.glassesTypes as unknown[]).includes(g))
         : [];
+    const rawRx = (o.glassesRx ?? {}) as Record<string, unknown>;
+    const glassesRx: Record<string, EyeRx> = {};
+    const rxErrors: string[] = [];
+    for (const g of glassesTypes) {
+      const e = (rawRx[g] ?? {}) as { od?: unknown; oi?: unknown };
+      const od = str(e.od).replace(/\s/g, "");
+      const oi = str(e.oi).replace(/\s/g, "");
+      if ((od && !isDiopter(od)) || (oi && !isDiopter(oi))) {
+        rxErrors.push(`la graduación de ${g} no es válida (ej. -2,50)`);
+      }
+      if (od || oi) glassesRx[g] = { od, oi };
+    }
+
+    const usesContraceptive = sex === "f" && answers.contraceptive?.value === "si";
+    const contraceptiveType =
+      usesContraceptive &&
+      (CONTRACEPTIVE_OPTIONS as readonly string[]).includes(o.contraceptiveType as string)
+        ? (o.contraceptiveType as string)
+        : "";
+    const contraceptiveMonth = usesContraceptive ? str(o.contraceptiveMonth) : "";
+    // El detalle libre del anticonceptivo solo cuenta para "Otro".
+    if (usesContraceptive && contraceptiveType !== "Otro") {
+      answers.contraceptive.detail = "";
+    }
+
     const lastPeriod = sex === "f" ? str(o.lastPeriod) : "";
 
     const member: Member = {
@@ -232,6 +291,9 @@ export function parseDeclaration(input: unknown): {
       weightKg: str(o.weightKg),
       answers,
       glassesTypes: [...glassesTypes],
+      glassesRx,
+      contraceptiveType,
+      contraceptiveMonth: isYearMonth(contraceptiveMonth) ? contraceptiveMonth : "",
       lastPeriod: isIsoDate(lastPeriod) ? lastPeriod : "",
     };
 
@@ -243,6 +305,19 @@ export function parseDeclaration(input: unknown): {
     if (!isNumberish(member.weightKg)) errors.push(`${who}: falta el peso`);
     for (const q of questionsFor(sex)) {
       if (!answers[q.key].value) errors.push(`${who}: falta responder “${q.short}”`);
+    }
+    if (answers.glasses?.value === "si" && glassesTypes.length === 0) {
+      errors.push(`${who}: marcá si es miopía, astigmatismo o presbicia`);
+    }
+    for (const e of rxErrors) errors.push(`${who}: ${e}`);
+    if (usesContraceptive) {
+      if (!contraceptiveType) errors.push(`${who}: elegí qué anticonceptivo tenés`);
+      else if (contraceptiveType === "Otro" && !answers.contraceptive.detail) {
+        errors.push(`${who}: contá qué anticonceptivo tenés`);
+      }
+      if (!member.contraceptiveMonth) {
+        errors.push(`${who}: falta el mes y año de colocación del anticonceptivo`);
+      }
     }
     return member;
   });
@@ -277,6 +352,25 @@ function formatDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
+function glassesText(m: Member): string {
+  return m.glassesTypes
+    .map((g) => {
+      const rx = m.glassesRx[g];
+      const eyes = [rx?.od && `OD ${rx.od}`, rx?.oi && `OI ${rx.oi}`].filter(Boolean);
+      return eyes.length ? `${g} (${eyes.join(" · ")})` : g;
+    })
+    .join(", ");
+}
+
+function contraceptiveText(m: Member): string {
+  const what =
+    m.contraceptiveType === "Otro"
+      ? m.answers.contraceptive?.detail || "Otro"
+      : m.contraceptiveType;
+  const [y, mo] = m.contraceptiveMonth.split("-");
+  return [what, m.contraceptiveMonth && `colocado ${mo}/${y}`].filter(Boolean).join(", ");
+}
+
 function unit(v: string, u: string): string {
   return v ? `${v} ${u}` : "—";
 }
@@ -306,11 +400,13 @@ export function formatDeclaration(
       `Edad, altura y peso: ${unit(m.age, "años")} - ${unit(m.heightCm, "cm")} - ${unit(m.weightKg, "kg")}`,
     );
     for (const q of questionsFor(m.sex)) {
-      const extra =
-        q.key === "glasses" && m.glassesTypes.length
-          ? m.glassesTypes.join(", ")
-          : undefined;
-      lines.push(`${q.short}: ${answerText(m.answers[q.key], extra)}`);
+      const a = m.answers[q.key];
+      if (q.key === "contraceptive" && a?.value === "si") {
+        lines.push(`${q.short}: SÍ — ${contraceptiveText(m)}`);
+        continue;
+      }
+      const extra = q.key === "glasses" && m.glassesTypes.length ? glassesText(m) : undefined;
+      lines.push(`${q.short}: ${answerText(a, extra)}`);
     }
     if (m.sex === "f") {
       lines.push(

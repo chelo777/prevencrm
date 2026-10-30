@@ -4,12 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import {
   emptyDeclaration,
   emptyMember,
+  CONTRACEPTIVE_OPTIONS,
   GLASSES_OPTIONS,
   MAX_MEMBERS,
   memberTitle,
   parseDeclaration,
   questionsFor,
   type Declaration,
+  type EyeRx,
   type Member,
   type Relation,
   type YesNoAnswer,
@@ -269,12 +271,15 @@ function YesNoQuestion({
   answer,
   onChange,
   children,
+  showDetail = true,
 }: {
   label: string;
   detailLabel: string;
   answer: YesNoAnswer;
   onChange: (patch: Partial<YesNoAnswer>) => void;
   children?: React.ReactNode;
+  /** false = el texto libre no aplica (lo reemplaza `children`). */
+  showDetail?: boolean;
 }) {
   return (
     <div className="space-y-2">
@@ -290,14 +295,16 @@ function YesNoQuestion({
       {answer.value === "si" && (
         <>
           {children}
-          <textarea
-            value={answer.detail}
-            onChange={(e) => onChange({ detail: e.target.value })}
-            placeholder={detailLabel}
-            rows={2}
-            maxLength={300}
-            className={`${INPUT} py-2`}
-          />
+          {showDetail && (
+            <textarea
+              value={answer.detail}
+              onChange={(e) => onChange({ detail: e.target.value })}
+              placeholder={detailLabel}
+              rows={2}
+              maxLength={300}
+              className={`${INPUT} py-2`}
+            />
+          )}
         </>
       )}
     </div>
@@ -402,31 +409,14 @@ function MemberCard({
         <YesNoQuestion
           key={q.key}
           label={q.label}
-          detailLabel={q.key === "glasses" ? "Algo más (opcional)" : q.detailLabel}
+          detailLabel={q.detailLabel}
           answer={m.answers[q.key]}
           onChange={(patch) => onAnswer(q.key, patch)}
+          showDetail={q.key !== "contraceptive" || m.contraceptiveType === "Otro"}
         >
-          {q.key === "glasses" && (
-            <div className="flex flex-wrap gap-2">
-              {GLASSES_OPTIONS.map((g) => {
-                const on = m.glassesTypes.includes(g);
-                return (
-                  <Chip
-                    key={g}
-                    active={on}
-                    onClick={() =>
-                      onChange({
-                        glassesTypes: on
-                          ? m.glassesTypes.filter((x) => x !== g)
-                          : [...m.glassesTypes, g],
-                      })
-                    }
-                  >
-                    {g}
-                  </Chip>
-                );
-              })}
-            </div>
+          {q.key === "glasses" && <GlassesFields member={m} onChange={onChange} />}
+          {q.key === "contraceptive" && (
+            <ContraceptiveFields member={m} onChange={onChange} />
           )}
         </YesNoQuestion>
       ))}
@@ -445,6 +435,156 @@ function MemberCard({
         </label>
       )}
     </Card>
+  );
+}
+
+function GlassesFields({
+  member: m,
+  onChange,
+}: {
+  member: Member;
+  onChange: (patch: Partial<Member>) => void;
+}) {
+  function setRx(type: string, eye: keyof EyeRx, value: string) {
+    const current = m.glassesRx[type] ?? { od: "", oi: "" };
+    onChange({
+      glassesRx: {
+        ...m.glassesRx,
+        [type]: { ...current, [eye]: value.replace(/[^\d.,+-]/g, "") },
+      },
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {GLASSES_OPTIONS.map((g) => {
+          const on = m.glassesTypes.includes(g);
+          return (
+            <Chip
+              key={g}
+              active={on}
+              onClick={() =>
+                onChange({
+                  glassesTypes: on
+                    ? m.glassesTypes.filter((x) => x !== g)
+                    : [...m.glassesTypes, g],
+                })
+              }
+            >
+              {g}
+            </Chip>
+          );
+        })}
+      </div>
+
+      {m.glassesTypes.length > 0 && (
+        <div className="space-y-3 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200">
+          <p className="text-xs text-slate-600">
+            Graduación en dioptrías, como figura en tu receta. Si no la sabés,
+            dejala vacía.
+          </p>
+          {GLASSES_OPTIONS.filter((g) => m.glassesTypes.includes(g)).map((g) => (
+            <div key={g} className="space-y-1">
+              <p className="text-sm font-semibold">{g}</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(["od", "oi"] as const).map((eye) => (
+                  <label key={eye} className="block space-y-1">
+                    <span className="text-xs font-medium text-slate-600">
+                      {eye === "od" ? "Ojo derecho" : "Ojo izquierdo"}
+                    </span>
+                    <input
+                      value={m.glassesRx[g]?.[eye] ?? ""}
+                      onChange={(e) => setRx(g, eye, e.target.value)}
+                      inputMode="decimal"
+                      placeholder="ej. 2,50"
+                      maxLength={6}
+                      className={INPUT}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const MONTHS = [
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
+];
+
+function ContraceptiveFields({
+  member: m,
+  onChange,
+}: {
+  member: Member;
+  onChange: (patch: Partial<Member>) => void;
+}) {
+  // Mes y año con dos selects: <input type="month"> no existe en varios
+  // navegadores y ahí cae a un campo de texto sin formato.
+  const [year = "", month = ""] = m.contraceptiveMonth.split("-");
+  const [thisYear] = useState(() => new Date().getFullYear());
+  const years = Array.from({ length: 21 }, (_, i) => String(thisYear - i));
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        {CONTRACEPTIVE_OPTIONS.map((c) => (
+          <Chip
+            key={c}
+            active={m.contraceptiveType === c}
+            onClick={() => onChange({ contraceptiveType: c })}
+          >
+            {c}
+          </Chip>
+        ))}
+      </div>
+      <div className="space-y-1">
+        <span className="text-xs font-medium text-slate-600">Fecha de colocación</span>
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={month}
+            onChange={(e) => onChange({ contraceptiveMonth: `${year}-${e.target.value}` })}
+            aria-label="Mes de colocación"
+            className={INPUT}
+          >
+            <option value="">Mes</option>
+            {MONTHS.map((name, i) => (
+              <option key={name} value={String(i + 1).padStart(2, "0")}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={year}
+            onChange={(e) => onChange({ contraceptiveMonth: `${e.target.value}-${month}` })}
+            aria-label="Año de colocación"
+            className={INPUT}
+          >
+            <option value="">Año</option>
+            {years.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </div>
   );
 }
 
