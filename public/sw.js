@@ -21,8 +21,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || "",
-      icon: "/icons/192",
-      badge: "/icons/192",
+      icon: "/icons/192.png",
+      badge: "/icons/192.png",
       tag: data.tag || "prevencrm",
       renotify: true,
       data: { url: data.url || "/leads" },

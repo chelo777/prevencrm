@@ -1,59 +1,18 @@
-import { ImageResponse } from "next/og";
+import { NextResponse } from "next/server";
 
-// Íconos PWA (manifest + notificaciones push) generados en runtime con
-// la misma marca que src/app/icon.tsx — cuadrado violeta + globo de
-// chat. Fondo a sangre completa (sin borde redondeado propio): Android
-// aplica su máscara y así sirve tanto para purpose "any" como
-// "maskable".
+// Íconos PWA: ahora son PNG estáticos en public/icons/ (logo de
+// Prevención Salud). Esta ruta queda solo para PWAs ya instaladas y
+// suscripciones push que guardaron la URL vieja (/icons/192, /icons/512).
 
-export const runtime = "edge";
-
-const SIZES = new Set([192, 512]);
+const SIZES = new Set(["192", "512"]);
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ size: string }> },
 ) {
   const { size } = await ctx.params;
-  const px = Number(size);
-  if (!SIZES.has(px)) {
+  if (!SIZES.has(size)) {
     return new Response("Not found", { status: 404 });
   }
-
-  const glyph = Math.round(px * 0.5);
-
-  return new ImageResponse(
-    (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: "#7c3aed",
-        }}
-      >
-        <svg
-          width={glyph}
-          height={glyph}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="#ffffff"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-      </div>
-    ),
-    {
-      width: px,
-      height: px,
-      headers: {
-        "Cache-Control": "public, max-age=604800, immutable",
-      },
-    },
-  );
+  return NextResponse.redirect(new URL(`/icons/${size}.png`, req.url), 308);
 }

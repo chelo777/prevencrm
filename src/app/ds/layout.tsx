@@ -8,7 +8,8 @@ import type { ReactNode } from "react";
 // persona y debe salir con el `private, no-store` por defecto.
 
 export const metadata: Metadata = {
-  title: "Declaración de salud — Prevención Salud",
+  // absolute: sin el sufijo de la app, que el prospecto no tiene por qué ver.
+  title: { absolute: "Declaración de salud — Prevención Salud" },
   referrer: "no-referrer",
   robots: { index: false, follow: false },
 };

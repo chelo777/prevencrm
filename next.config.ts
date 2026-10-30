@@ -81,6 +81,10 @@ const PUBLIC_ROUTES = [
   "robots.txt",
   "sitemap.xml",
   "favicon.ico",
+  "icon.png",
+  "apple-icon.png",
+  "icons/.*", // íconos PWA / push
+  "brand/.*", // logo
 ].join("|");
 
 const nextConfig: NextConfig = {

@@ -6,7 +6,7 @@ import type { Metadata } from "next";
 // y setea expectativa. El reparto y el contacto salen del CRM.
 
 export const metadata: Metadata = {
-  title: "¡Gracias! — Prevención Salud",
+  title: { absolute: "¡Gracias! — Prevención Salud" },
   description: "Recibimos tu consulta. Un asesor te contacta por WhatsApp.",
 };
 
