@@ -265,10 +265,11 @@ export async function GET(request: Request) {
   }
 
   // Feedback de conversión a Meta (idempotente).
-  let capi = { candidates: 0, sent: 0, failed: 0, skipped: 0 };
+  let capi = { candidates: 0, sent: 0, failed: 0, skipped: 0, errors: 0 };
   try {
     capi = await reconcileAllCapi(admin);
   } catch (capiErr) {
+    capi.errors = 1;
     console.error("[leads/sync] error en reconciliación CAPI:", capiErr);
   }
 

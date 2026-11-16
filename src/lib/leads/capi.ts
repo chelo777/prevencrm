@@ -181,6 +181,47 @@ export interface CapiReconcileTotals {
   sent: number;
   failed: number;
   skipped: number;
+  /** Reconciliaciones (cuenta + evento) que no pudieron correr por un error
+   *  de lectura. Distinto de `failed`, que cuenta eventos rechazados por Meta. */
+  errors: number;
+}
+
+/**
+ * Máximo de UUIDs por filtro `in`. PostgREST devuelve la URL pedida en el
+ * header Content-Location: con ~430 UUIDs (≈16 KB) el fetch de Node rechaza
+ * la respuesta (UND_ERR_HEADERS_OVERFLOW) y supabase-js lo entrega como
+ * `error`, sin lanzar. 200 UUIDs ≈ 7,4 KB.
+ *
+ * Esto frenó el evento "calificado" desde 2026-09-21: la etapa pasó los 430
+ * deals, la consulta de leads empezó a fallar y, como el error se descartaba,
+ * la corrida terminaba "bien" sin enviar nada.
+ */
+export const IN_CHUNK = 200;
+
+/** Tope de filas por respuesta de PostgREST. */
+const PAGE_SIZE = 1000;
+
+type ReadResult<T> = { data: T[] | null; error: { message: string } | null };
+
+/** Una lectura fallida NUNCA se trata como "no hay filas". */
+function rowsOrThrow<T>(res: ReadResult<T>, what: string): T[] {
+  if (res.error) {
+    throw new Error(`CAPI: falló la lectura de ${what}: ${res.error.message}`);
+  }
+  return res.data ?? [];
+}
+
+/** Lee todas las páginas de una consulta (PostgREST corta en PAGE_SIZE). */
+async function readAllPages<T>(
+  page: (from: number, to: number) => PromiseLike<ReadResult<T>>,
+  what: string,
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const rows = rowsOrThrow(await page(from, from + PAGE_SIZE - 1), what);
+    all.push(...rows);
+    if (rows.length < PAGE_SIZE) return all;
+  }
 }
 
 interface CapiConfigRow {
@@ -202,80 +243,120 @@ export async function reconcileCapiForAccount(
   config: CapiConfigRow,
   accessToken: string,
 ): Promise<CapiReconcileTotals> {
-  const totals: CapiReconcileTotals = { candidates: 0, sent: 0, failed: 0, skipped: 0 };
+  const totals: CapiReconcileTotals = {
+    candidates: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    errors: 0,
+  };
   if (!config.active || !config.dataset_id) return totals;
 
   // Etapas de la cuenta que coinciden con el nombre disparador.
-  const { data: pipelines } = await admin
-    .from("pipelines")
-    .select("id")
-    .eq("account_id", config.account_id);
-  const pipelineIds = (pipelines ?? []).map((p) => p.id as string);
+  const pipelines = rowsOrThrow(
+    await admin.from("pipelines").select("id").eq("account_id", config.account_id),
+    "pipelines",
+  );
+  const pipelineIds = pipelines.map((p) => p.id as string);
   if (pipelineIds.length === 0) return totals;
 
-  const { data: stages } = await admin
-    .from("pipeline_stages")
-    .select("id")
-    .in("pipeline_id", pipelineIds)
-    .eq("name", config.trigger_stage_name);
-  const stageIds = (stages ?? []).map((s) => s.id as string);
+  const stages = rowsOrThrow(
+    await admin
+      .from("pipeline_stages")
+      .select("id")
+      .in("pipeline_id", pipelineIds)
+      .eq("name", config.trigger_stage_name),
+    "etapas disparadoras",
+  );
+  const stageIds = stages.map((s) => s.id as string);
   if (stageIds.length === 0) return totals;
 
-  // Deals que ya están en la etapa disparadora.
   // IDs de los custom fields de ubicación (matching de Meta). Solo estos
   // dos — jamás los campos de salud. Se resuelven una vez por cuenta.
-  const { data: locFields } = await admin
-    .from("custom_fields")
-    .select("id, field_name")
-    .eq("account_id", config.account_id)
-    .in("field_name", ["Ciudad", "Código Postal"]);
-  const cityFieldId =
-    (locFields ?? []).find((f) => f.field_name === "Ciudad")?.id as string | undefined;
-  const zipFieldId =
-    (locFields ?? []).find((f) => f.field_name === "Código Postal")?.id as
-      | string
-      | undefined;
+  const locFields = rowsOrThrow(
+    await admin
+      .from("custom_fields")
+      .select("id, field_name")
+      .eq("account_id", config.account_id)
+      .in("field_name", ["Ciudad", "Código Postal"]),
+    "custom fields de ubicación",
+  );
+  const cityFieldId = locFields.find((f) => f.field_name === "Ciudad")?.id as
+    | string
+    | undefined;
+  const zipFieldId = locFields.find((f) => f.field_name === "Código Postal")?.id as
+    | string
+    | undefined;
 
-  const { data: deals } = await admin
-    .from("deals")
-    .select("id, capitas")
-    .eq("account_id", config.account_id)
-    .in("stage_id", stageIds);
-  const dealIds = (deals ?? []).map((d) => d.id as string);
+  // Deals que ya están en la etapa disparadora (paginado: sin `range`,
+  // PostgREST corta en 1000 y el resto nunca recibiría su evento).
+  const deals = await readAllPages(
+    (from, to) =>
+      admin
+        .from("deals")
+        .select("id, capitas")
+        .eq("account_id", config.account_id)
+        .in("stage_id", stageIds)
+        .order("id")
+        .range(from, to),
+    "deals en la etapa disparadora",
+  );
+  const dealIds = deals.map((d) => d.id as string);
   if (dealIds.length === 0) return totals;
   const capitasByDeal = new Map<string, number | null>(
-    (deals ?? []).map((d) => [d.id as string, (d.capitas as number | null) ?? null]),
+    deals.map((d) => [d.id as string, (d.capitas as number | null) ?? null]),
   );
 
-  // Leads de esos deals.
-  const { data: leads } = await admin
-    .from("leads")
-    .select("id, deal_id, contact_id, meta_lead_id")
-    .eq("account_id", config.account_id)
-    .in("deal_id", dealIds);
+  // Leads de esos deals, de a IN_CHUNK ids por consulta (ver IN_CHUNK).
+  const leads: {
+    id: unknown;
+    deal_id: unknown;
+    contact_id: unknown;
+    meta_lead_id: unknown;
+  }[] = [];
+  for (let i = 0; i < dealIds.length; i += IN_CHUNK) {
+    const chunk = dealIds.slice(i, i + IN_CHUNK);
+    leads.push(
+      ...(await readAllPages(
+        (from, to) =>
+          admin
+            .from("leads")
+            .select("id, deal_id, contact_id, meta_lead_id")
+            .eq("account_id", config.account_id)
+            .in("deal_id", chunk)
+            .order("id")
+            .range(from, to),
+        "leads de los deals",
+      )),
+    );
+  }
 
-  // Estado de los eventos YA registrados para estos leads, en UNA consulta.
+  // Estado de los eventos YA registrados para estos leads, por lotes.
   // Antes se preguntaba de a un lead por vez (N+1): con ~500 deals en etapas
   // disparadoras eso eran ~500 consultas por corrida, cada 2 minutos, casi
   // todas para descubrir que el evento ya estaba enviado. Ese derroche fue lo
   // que voló la cuota de tráfico de Supabase (2026-08-09).
-  const leadIds = (leads ?? []).map((l) => l.id as string);
+  //
+  // Si esta lectura falla se corta la corrida: sin saber qué ya se envió no
+  // se puede decidir a quién mandarle el evento.
+  const leadIds = leads.map((l) => l.id as string);
   const statusByLead = new Map<string, string>();
-  if (leadIds.length > 0) {
-    // Se pagina de a 500 ids: un `in` gigante no entra en la URL.
-    for (let i = 0; i < leadIds.length; i += 500) {
-      const { data: rows } = await admin
+  for (let i = 0; i < leadIds.length; i += IN_CHUNK) {
+    // Sin paginar: hay a lo sumo una fila por (lead, evento).
+    const rows = rowsOrThrow(
+      await admin
         .from("lead_capi_events")
         .select("lead_id, status")
         .eq("event_name", config.event_name)
-        .in("lead_id", leadIds.slice(i, i + 500));
-      for (const r of rows ?? []) {
-        statusByLead.set(r.lead_id as string, r.status as string);
-      }
+        .in("lead_id", leadIds.slice(i, i + IN_CHUNK)),
+      "eventos ya registrados",
+    );
+    for (const r of rows) {
+      statusByLead.set(r.lead_id as string, r.status as string);
     }
   }
 
-  for (const lead of leads ?? []) {
+  for (const lead of leads) {
     const leadId = lead.id as string;
     const eventId = `${leadId}:${config.event_name}`;
 
@@ -376,24 +457,44 @@ export async function reconcileCapiForAccount(
 export async function reconcileAllCapi(
   admin: SupabaseClient,
 ): Promise<CapiReconcileTotals> {
-  const totals: CapiReconcileTotals = { candidates: 0, sent: 0, failed: 0, skipped: 0 };
+  const totals: CapiReconcileTotals = {
+    candidates: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    errors: 0,
+  };
   // Fallback: el token de leads (system user con ads_management) sirve
   // también para CAPI si el dataset es un activo del mismo negocio.
   const accessToken =
     process.env.META_CAPI_ACCESS_TOKEN ?? process.env.META_LEADS_ACCESS_TOKEN;
   if (!accessToken) return totals; // CAPI no configurada — no-op silencioso.
 
-  const { data: configs } = await admin
-    .from("lead_capi_config")
-    .select("account_id, dataset_id, trigger_stage_name, event_name, active, send_value")
-    .eq("active", true);
+  const configs = rowsOrThrow(
+    await admin
+      .from("lead_capi_config")
+      .select("account_id, dataset_id, trigger_stage_name, event_name, active, send_value")
+      .eq("active", true),
+    "configuración de CAPI",
+  ) as CapiConfigRow[];
 
-  for (const config of (configs ?? []) as CapiConfigRow[]) {
-    const t = await reconcileCapiForAccount(admin, config, accessToken);
-    totals.candidates += t.candidates;
-    totals.sent += t.sent;
-    totals.failed += t.failed;
-    totals.skipped += t.skipped;
+  for (const config of configs) {
+    // Cada evento se reconcilia por separado: si uno falla, los demás igual
+    // salen, y el fallo queda contado en `errors` (visible en la respuesta
+    // del cron) en vez de pasar por una corrida sin novedades.
+    try {
+      const t = await reconcileCapiForAccount(admin, config, accessToken);
+      totals.candidates += t.candidates;
+      totals.sent += t.sent;
+      totals.failed += t.failed;
+      totals.skipped += t.skipped;
+    } catch (err) {
+      totals.errors++;
+      console.error(
+        `[capi] no se pudo reconciliar el evento "${config.event_name}" de la cuenta ${config.account_id}:`,
+        err,
+      );
+    }
   }
   return totals;
 }
